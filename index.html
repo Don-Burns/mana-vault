@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#1a1a2e" />
+  <meta name="description" content="MTG Card Scanner - Scan and manage your Magic: The Gathering collection" />
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+  <title>MTG Scanner</title>
+  <link rel="stylesheet" href="/src/styles.css" />
+</head>
+<body>
+  <div id="app">
+    <nav id="nav-bar">
+      <button class="nav-btn active" data-view="scanner">Scan</button>
+      <button class="nav-btn" data-view="collection">Collection</button>
+    </nav>
+    <main id="main-content">
+      <!-- Views rendered here -->
+    </main>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

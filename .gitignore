@@ -1,0 +1,23 @@
+# Build output
+dist/
+
+# Dependencies
+node_modules/
+
+# Data directory (downloaded from Scryfall - large)
+data/
+
+# Deno
+.deno/
+
+# Generated DB files (built from data/)
+public/db/hash-db.bin
+public/db/metadata.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
