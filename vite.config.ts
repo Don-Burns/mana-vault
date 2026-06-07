@@ -20,9 +20,6 @@ export default defineConfig({
       },
     },
   },
-  optimizeDeps: {
-    exclude: ["@techstark/opencv-js"],
-  },
   worker: {
     format: "es",
   },

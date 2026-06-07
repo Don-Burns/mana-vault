@@ -24,52 +24,54 @@ export function computeHashesFromImageData(imageData: ImageData): { pHash: bigin
 
 /**
  * Convert ImageData to 32x32 grayscale pixel array.
- * Uses bilinear interpolation for quality downscaling.
+ *
+ * Uses area averaging with fractional edge weights: each output pixel is
+ * the weighted mean of all source pixels that overlap it, with partial
+ * pixels at the edges weighted proportionally.  This matches OpenCV's
+ * INTER_AREA behaviour and is critical for large downscale factors
+ * (e.g. 660×450 → 32×32) where bilinear interpolation would sample
+ * only 4 neighbours and miss most of the image content.
  */
 function toGrayscale32x32(imageData: ImageData): Uint8Array {
   const { data, width, height } = imageData;
   const size = 32;
   const output = new Uint8Array(size * size);
 
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      // Map to source coordinates
-      const srcX = (x + 0.5) * (width / size) - 0.5;
-      const srcY = (y + 0.5) * (height / size) - 0.5;
+  const scaleX = width / size;
+  const scaleY = height / size;
 
-      // Bilinear interpolation
-      const x0 = Math.floor(srcX);
-      const y0 = Math.floor(srcY);
-      const x1 = Math.min(x0 + 1, width - 1);
-      const y1 = Math.min(y0 + 1, height - 1);
-      const xFrac = srcX - x0;
-      const yFrac = srcY - y0;
+  for (let oy = 0; oy < size; oy++) {
+    const srcYStart = oy * scaleY;
+    const srcYEnd = (oy + 1) * scaleY;
+    const syMin = Math.floor(srcYStart);
+    const syMax = Math.ceil(srcYEnd);
 
-      // Get grayscale values at 4 corners (luminance formula)
-      const g00 = pixelGray(data, width, x0, y0);
-      const g10 = pixelGray(data, width, x1, y0);
-      const g01 = pixelGray(data, width, x0, y1);
-      const g11 = pixelGray(data, width, x1, y1);
+    for (let ox = 0; ox < size; ox++) {
+      const srcXStart = ox * scaleX;
+      const srcXEnd = (ox + 1) * scaleX;
+      const sxMin = Math.floor(srcXStart);
+      const sxMax = Math.ceil(srcXEnd);
 
-      // Bilinear interpolate
-      const gray = Math.round(
-        g00 * (1 - xFrac) * (1 - yFrac) +
-        g10 * xFrac * (1 - yFrac) +
-        g01 * (1 - xFrac) * yFrac +
-        g11 * xFrac * yFrac,
-      );
+      let sum = 0;
+      let area = 0;
 
-      output[y * size + x] = gray;
+      for (let sy = syMin; sy < syMax; sy++) {
+        const yWeight = Math.min(sy + 1, srcYEnd) - Math.max(sy, srcYStart);
+        const rowOffset = sy * width;
+
+        for (let sx = sxMin; sx < sxMax; sx++) {
+          const xWeight = Math.min(sx + 1, srcXEnd) - Math.max(sx, srcXStart);
+          const weight = xWeight * yWeight;
+          const idx = (rowOffset + sx) * 4;
+          // ITU-R BT.601 luminance
+          sum += weight * (0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2]);
+          area += weight;
+        }
+      }
+
+      output[oy * size + ox] = Math.round(sum / area);
     }
   }
 
   return output;
 }
-
-function pixelGray(data: Uint8ClampedArray, width: number, x: number, y: number): number {
-  const idx = (y * width + x) * 4;
-  // ITU-R BT.601 luminance
-  return 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-}
-
-

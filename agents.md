@@ -21,6 +21,8 @@ deno task preview      # Preview production build
 deno task db:download  # Download Scryfall bulk card data → data/bulk/
 deno task db:art       # Download art crop images → data/art/ (hours, resumable)
 deno task db:build     # Generate hash-db.bin + metadata.json → public/db/
+deno task opencv:download  # Download & patch OpenCV.js 4.13.0 → vendor/opencv/opencv.cjs
+deno task test         # Run tests (deno test -A)
 ```
 
 ### Build Output
@@ -42,6 +44,7 @@ dist/
 | `src/` | PWA source (Vite bundles this) |
 | `src/workers/` | Web Worker for OpenCV (runs off main thread) |
 | `tools/` | Deno CLI scripts for building the hash database |
+| `vendor/opencv/` | Vendored OpenCV.js 4.13.0 (WASM embedded, downloaded via task) |
 | `public/db/` | Generated hash DB + metadata (gitignored, built by tools) |
 | `data/` | Downloaded Scryfall data (gitignored, large) |
 
@@ -68,9 +71,30 @@ The image preprocessing (resizing to 32x32 grayscale) differs between build and 
 `sharp` (native C++) isn't available in the browser and `ImageData` isn't available in the build tool.
 The core hash math (DCT for pHash, gradient comparison for dHash) is identical.
 
+### OpenCV.js Vendoring
+
+OpenCV.js is **vendored** (not installed from npm). The setup:
+
+1. `deno task opencv:download` runs `tools/download-opencv.ts`, which:
+   - Downloads the official OpenCV 4.13.0 release zip from GitHub
+   - Extracts `js/bin/opencv.js` (the UMD build with base64-embedded WASM)
+   - Applies 3 patches for Deno compatibility (Emscripten's environment detection mistakes Deno for Node.js due to Deno's `process` shim)
+   - Writes the patched file to `vendor/opencv/opencv.cjs`
+
+2. `vendor/opencv/mod.ts` is the ES module wrapper that:
+   - Imports the CJS file (`.cjs` extension ensures Deno loads it as CommonJS)
+   - Waits for `onRuntimeInitialized` via top-level await
+   - Re-exports the ready-to-use `cv` object as the default export
+
+3. Both the browser worker (`src/workers/detection-worker.ts`) and Deno tests import from `vendor/opencv/mod.ts`
+
+The `.cjs` file is ~10.5 MB and gitignored. Run `deno task opencv:download` after cloning.
+
 ### OpenCV Memory Management
 
-OpenCV.js uses manual memory management (WASM heap). Every `cv.Mat` must be `.delete()`-ed or you leak memory. The detection worker (`src/workers/detection-worker.ts`) is careful about this with `try/finally` blocks. If you add new Mat operations, always delete them.
+OpenCV.js uses manual memory management (WASM heap). Every `cv.Mat` must be `.delete()`-ed or you leak memory. The detection pipeline (`src/detection/pipeline.ts`) is careful about this with `try/finally` blocks. If you add new Mat operations, always delete them.
+
+**Critical: `clone()` vs `copyTo()` for ROI Mats.** In OpenCV.js, `mat.roi(rect)` creates a non-contiguous Mat that shares the parent's row stride. `clone()` preserves this non-contiguous layout — the resulting Mat has the parent's step size, and `mat.data` reads garbled bytes across row boundaries. Always use `copyTo()` to create truly contiguous copies of ROIs. `pipeline.ts` and `matToImageData` both handle this.
 
 ### Binary Hash DB Format
 
@@ -106,7 +130,7 @@ The singleton `collectionStore` in `src/collection/store.ts` must have `.open()`
 
 - Vite runs via `deno run -A npm:vite` — Deno's Node compat layer
 - `deno.json` has `"nodeModulesDir": "auto"` so npm packages resolve for Vite's bundler
-- `@techstark/opencv-js` is excluded from Vite's optimizeDeps (too large to pre-bundle)
+- OpenCV.js is vendored in `vendor/opencv/` (not from npm) — see "OpenCV.js Vendoring" section above
 - The `tools/` scripts use `/// <reference lib="deno.ns" />` because `deno.json` compilerOptions target DOM (for the PWA source)
 - Service worker is a separate Rollup entry point with a fixed output name `sw.js`
 - COOP/COEP headers are set in dev server for SharedArrayBuffer compatibility
@@ -129,9 +153,10 @@ The singleton `collectionStore` in `src/collection/store.ts` must have `.open()`
 | `sw.ts` | 132 | Service worker. Cache-first for WASM/DB, stale-while-revalidate for assets |
 | `camera/capture.ts` | 139 | Camera class wrapping getUserMedia. Frame handler loop via rAF |
 | `detection/detector.ts` | 115 | Main thread ↔ Worker bridge. Async `detect(ImageData)` → `DetectionResult` |
-| `detection/frame-classifier.ts` | 220 | Classify card frame type by border analysis. Exports `ART_REGIONS` crop ratios |
-| `workers/detection-worker.ts` | 353 | OpenCV pipeline: edges → contours → quad filter → perspective warp → art crop |
-| `matching/hasher.ts` | 75 | Client-side grayscale conversion from ImageData, delegates to hash-core.ts |
+| `detection/pipeline.ts` | ~260 | Core detection functions: contour detection, perspective warp, art extraction. Shared by worker and tests |
+| `detection/frame-classifier.ts` | ~90 | Classify card frame type by border thickness. Exports `ART_REGIONS` crop ratios |
+| `workers/detection-worker.ts` | ~80 | Thin wrapper: loads OpenCV, converts ImageData↔Mat, delegates to pipeline.ts |
+| `matching/hasher.ts` | ~65 | Client-side ImageData → 32×32 grayscale (area-averaged) → hash-core.ts |
 | `matching/hash-core.ts` | 88 | Shared pHash (DCT) + dHash (gradient) algorithms. Used by both client and build tool |
 | `matching/hashdb.ts` | 159 | Parse binary hash DB into BigUint64Array. Private constructor, use `HashDB.load()` |
 | `matching/matcher.ts` | 145 | Hamming distance brute-force search. 60/40 pHash/dHash weighting. Confidence via exp decay |
@@ -149,6 +174,7 @@ The singleton `collectionStore` in `src/collection/store.ts` must have `.open()`
 | `download-bulk.ts` | 169 | Fetch Scryfall bulk JSON, extract fields, handle DFCs, write cards.json |
 | `download-art.ts` | 177 | Download art_crop JPEGs per illustration_id. Rate-limited, resumable via .progress.json |
 | `build-hashdb.ts` | 230 | Compute hashes with sharp (imports hash-core.ts), write binary DB + metadata JSON, copy to public/db/ |
+| `download-opencv.ts` | ~80 | Download OpenCV.js 4.13.0 from GitHub, patch for Deno, write to vendor/opencv/opencv.cjs |
 
 ## Detection Pipeline Details
 
@@ -162,9 +188,10 @@ Camera frame (1280×720 RGBA)
   → Filter: area 5-95% of frame, approxPolyDP to 4 vertices, convex, aspect ratio 0.55-0.85
   → Order corners (sum/difference sort → TL, TR, BR, BL)
   → getPerspectiveTransform → warpPerspective to 745×1040
-  → classifyFrameType (border variance/thickness analysis)
+  → classifyFrameType (border thickness measurement)
   → Crop art region (percentages from ART_REGIONS lookup)
-  → Return {corners, cardImage, artRegion} to main thread
+  → Return {corners, cardMat, artMat} to worker
+  → Worker converts to ImageData and posts to main thread
 ```
 
 Auto-capture triggers after 15 consecutive frames where all 4 corners moved < 15px. 2-second cooldown between captures to avoid duplicates.
@@ -180,12 +207,13 @@ Auto-capture triggers after 15 consecutive frames where all 4 corners moved < 15
 ## Known Limitations / Future Work
 
 - Folder picker for moves uses `prompt()` — needs a proper modal dialog
-- No tests yet (the `tests/` directory is empty)
+- No tests yet (the `tests/` directory is empty) ← **resolved: 7 tests in `tests/card_detection_test.ts` cover the full pipeline: OpenCV contour detection, perspective warp, art extraction, hash computation (server + client paths), and matching**
 - `captureFrame()` in camera creates a new canvas each call (could reuse)
 - `detector.ts` pending promises never time out — if the worker stalls, they leak
 - `importCollection` is destructive (clears before import, no merge option)
 - The hash algorithms are duplicated between tools and src (could extract a shared module but Deno vs browser runtimes make this tricky) ← **resolved: now in `src/matching/hash-core.ts`**
+- OpenCV.js comes from a third-party npm wrapper (`@techstark/opencv-js`) ← **resolved: vendored official 4.13.0 build in `vendor/opencv/`**
 - No lazy-loading of OpenCV — it blocks the worker on first load
-- Frame classifier thresholds are heuristic and untested against real card photos
+- Frame classifier thresholds are heuristic and untested against real card photos ← **partially resolved: classifier rewritten to use border thickness measurement; tested against one real photo; needs more test fixtures**
 - Statistics view not implemented
 - No PWA install prompt UX
