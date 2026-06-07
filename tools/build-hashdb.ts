@@ -25,6 +25,7 @@ import {
   type PrintingInfo,
 } from "./config.ts";
 import { join } from "https://deno.land/std@0.224.0/path/mod.ts";
+import { computePHash, computeDHash } from "../src/matching/hash-core.ts";
 
 // We use the 'sharp' library via Deno's npm compatibility for image processing
 import sharp from "npm:sharp@0.33.2";
@@ -186,8 +187,8 @@ async function main() {
 /**
  * Compute perceptual hash (pHash) and difference hash (dHash) for an image.
  *
- * pHash: Based on DCT (Discrete Cosine Transform) of the image
- * dHash: Based on gradient direction between adjacent pixels
+ * Uses sharp for image resizing, then delegates to the shared hash algorithms
+ * in src/matching/hash-core.ts.
  */
 async function computeHashes(imageBuffer: Uint8Array): Promise<{ pHash: bigint; dHash: bigint }> {
   // Resize to small square and convert to grayscale
@@ -203,95 +204,6 @@ async function computeHashes(imageBuffer: Uint8Array): Promise<{ pHash: bigint; 
   const dHash = computeDHash(pixels, HASH_IMAGE_SIZE);
 
   return { pHash, dHash };
-}
-
-/**
- * Perceptual Hash (pHash)
- *
- * 1. Compute DCT of the image
- * 2. Take the top-left 8x8 block (low frequencies)
- * 3. Compute median of the 64 DCT values
- * 4. Each bit = 1 if DCT value > median, else 0
- */
-function computePHash(pixels: Uint8Array, size: number): bigint {
-  // Compute 2D DCT
-  const dctValues: number[] = [];
-  const dctSize = 8; // We only need top-left 8x8
-
-  for (let u = 0; u < dctSize; u++) {
-    for (let v = 0; v < dctSize; v++) {
-      let sum = 0;
-      for (let x = 0; x < size; x++) {
-        for (let y = 0; y < size; y++) {
-          const pixel = pixels[x * size + y];
-          sum += pixel *
-            Math.cos(((2 * x + 1) * u * Math.PI) / (2 * size)) *
-            Math.cos(((2 * y + 1) * v * Math.PI) / (2 * size));
-        }
-      }
-
-      const cu = u === 0 ? 1 / Math.SQRT2 : 1;
-      const cv = v === 0 ? 1 / Math.SQRT2 : 1;
-      dctValues.push(sum * cu * cv * (2 / size));
-    }
-  }
-
-  // Skip DC component (index 0), use remaining 63 values + DC = 64 total
-  // Actually use all 64 for the hash
-  const sorted = [...dctValues].sort((a, b) => a - b);
-  const median = sorted[Math.floor(sorted.length / 2)];
-
-  // Generate 64-bit hash
-  let hash = 0n;
-  for (let i = 0; i < 64; i++) {
-    if (dctValues[i] > median) {
-      hash |= 1n << BigInt(63 - i);
-    }
-  }
-
-  return hash;
-}
-
-/**
- * Difference Hash (dHash)
- *
- * 1. Resize to 9x8 (9 wide, 8 tall)
- * 2. Each bit = 1 if pixel[x] > pixel[x+1], comparing horizontally
- * 3. Produces 64 bits (8 rows × 8 comparisons per row)
- *
- * Since we already have a 32x32 image, we'll resample to 9x8.
- */
-function computeDHash(pixels: Uint8Array, size: number): bigint {
-  // Resample to 9x8
-  const dHashW = 9;
-  const dHashH = 8;
-  const resampled: number[] = [];
-
-  for (let y = 0; y < dHashH; y++) {
-    for (let x = 0; x < dHashW; x++) {
-      // Map to source coordinates
-      const srcX = Math.floor((x / dHashW) * size);
-      const srcY = Math.floor((y / dHashH) * size);
-      resampled.push(pixels[srcY * size + srcX]);
-    }
-  }
-
-  // Compute hash: compare adjacent horizontal pixels
-  let hash = 0n;
-  let bit = 63;
-
-  for (let y = 0; y < dHashH; y++) {
-    for (let x = 0; x < dHashW - 1; x++) {
-      const left = resampled[y * dHashW + x];
-      const right = resampled[y * dHashW + x + 1];
-      if (left > right) {
-        hash |= 1n << BigInt(bit);
-      }
-      bit--;
-    }
-  }
-
-  return hash;
 }
 
 // Utility functions

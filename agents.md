@@ -57,16 +57,16 @@ Two separate concerns:
 
 ## Critical Knowledge
 
-### The Hash Algorithms Are Duplicated
+### The Hash Algorithms Live in a Shared Module
 
-The pHash and dHash computation exists in **two places**:
-- `tools/build-hashdb.ts` — runs on Deno with `npm:sharp` for image resizing
-- `src/matching/hasher.ts` — runs in-browser using canvas `ImageData`
+The pHash and dHash computation lives in **one place**: `src/matching/hash-core.ts`.
+It is imported by both:
+- `tools/build-hashdb.ts` — uses `npm:sharp` for 32x32 grayscale resizing, then calls the shared hash functions
+- `src/matching/hasher.ts` — uses bilinear interpolation on browser `ImageData` for 32x32 grayscale resizing, then calls the shared hash functions
 
-**These must produce identical hashes for matching to work.** If you change the algorithm in one, change it in the other. Both:
-1. Resize to 32×32 grayscale
-2. pHash: 2D DCT → top-left 8×8 → median threshold → 64 bits
-3. dHash: resample to 9×8 → horizontal gradient comparison → 64 bits
+The image preprocessing (resizing to 32x32 grayscale) differs between build and client because
+`sharp` (native C++) isn't available in the browser and `ImageData` isn't available in the build tool.
+The core hash math (DCT for pHash, gradient comparison for dHash) is identical.
 
 ### OpenCV Memory Management
 
@@ -131,7 +131,8 @@ The singleton `collectionStore` in `src/collection/store.ts` must have `.open()`
 | `detection/detector.ts` | 115 | Main thread ↔ Worker bridge. Async `detect(ImageData)` → `DetectionResult` |
 | `detection/frame-classifier.ts` | 220 | Classify card frame type by border analysis. Exports `ART_REGIONS` crop ratios |
 | `workers/detection-worker.ts` | 353 | OpenCV pipeline: edges → contours → quad filter → perspective warp → art crop |
-| `matching/hasher.ts` | 137 | Client-side pHash + dHash from ImageData. Uses bigint for 64-bit values |
+| `matching/hasher.ts` | 75 | Client-side grayscale conversion from ImageData, delegates to hash-core.ts |
+| `matching/hash-core.ts` | 88 | Shared pHash (DCT) + dHash (gradient) algorithms. Used by both client and build tool |
 | `matching/hashdb.ts` | 159 | Parse binary hash DB into BigUint64Array. Private constructor, use `HashDB.load()` |
 | `matching/matcher.ts` | 145 | Hamming distance brute-force search. 60/40 pHash/dHash weighting. Confidence via exp decay |
 | `collection/store.ts` | 423 | IndexedDB singleton. Folders + cards CRUD, move with quantity split/merge, export/import |
@@ -147,7 +148,7 @@ The singleton `collectionStore` in `src/collection/store.ts` must have `.open()`
 | `config.ts` | 69 | Shared paths, types, constants (rate limit, hash size, Scryfall URL) |
 | `download-bulk.ts` | 169 | Fetch Scryfall bulk JSON, extract fields, handle DFCs, write cards.json |
 | `download-art.ts` | 177 | Download art_crop JPEGs per illustration_id. Rate-limited, resumable via .progress.json |
-| `build-hashdb.ts` | 318 | Compute hashes with sharp, write binary DB + metadata JSON, copy to public/db/ |
+| `build-hashdb.ts` | 230 | Compute hashes with sharp (imports hash-core.ts), write binary DB + metadata JSON, copy to public/db/ |
 
 ## Detection Pipeline Details
 
@@ -183,7 +184,7 @@ Auto-capture triggers after 15 consecutive frames where all 4 corners moved < 15
 - `captureFrame()` in camera creates a new canvas each call (could reuse)
 - `detector.ts` pending promises never time out — if the worker stalls, they leak
 - `importCollection` is destructive (clears before import, no merge option)
-- The hash algorithms are duplicated between tools and src (could extract a shared module but Deno vs browser runtimes make this tricky)
+- The hash algorithms are duplicated between tools and src (could extract a shared module but Deno vs browser runtimes make this tricky) ← **resolved: now in `src/matching/hash-core.ts`**
 - No lazy-loading of OpenCV — it blocks the worker on first load
 - Frame classifier thresholds are heuristic and untested against real card photos
 - Statistics view not implemented

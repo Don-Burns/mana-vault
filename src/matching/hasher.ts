@@ -3,7 +3,13 @@
  *
  * Computes pHash and dHash from an ImageData object (extracted art region).
  * Designed to run in a Web Worker for performance.
+ *
+ * The core hash algorithms live in hash-core.ts and are shared with the
+ * build tool (tools/build-hashdb.ts). This module handles the browser-specific
+ * ImageData → 32x32 grayscale conversion before delegating to the shared code.
  */
+
+import { computePHash, computeDHash } from "./hash-core.ts";
 
 /**
  * Compute pHash and dHash from an art region ImageData.
@@ -66,72 +72,4 @@ function pixelGray(data: Uint8ClampedArray, width: number, x: number, y: number)
   return 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
 }
 
-/**
- * Perceptual Hash (pHash) - DCT based
- */
-function computePHash(pixels: Uint8Array, size: number): bigint {
-  const dctSize = 8;
-  const dctValues: number[] = [];
 
-  for (let u = 0; u < dctSize; u++) {
-    for (let v = 0; v < dctSize; v++) {
-      let sum = 0;
-      for (let x = 0; x < size; x++) {
-        for (let y = 0; y < size; y++) {
-          const pixel = pixels[x * size + y];
-          sum += pixel *
-            Math.cos(((2 * x + 1) * u * Math.PI) / (2 * size)) *
-            Math.cos(((2 * y + 1) * v * Math.PI) / (2 * size));
-        }
-      }
-      const cu = u === 0 ? 1 / Math.SQRT2 : 1;
-      const cv = v === 0 ? 1 / Math.SQRT2 : 1;
-      dctValues.push(sum * cu * cv * (2 / size));
-    }
-  }
-
-  const sorted = [...dctValues].sort((a, b) => a - b);
-  const median = sorted[Math.floor(sorted.length / 2)];
-
-  let hash = 0n;
-  for (let i = 0; i < 64; i++) {
-    if (dctValues[i] > median) {
-      hash |= 1n << BigInt(63 - i);
-    }
-  }
-
-  return hash;
-}
-
-/**
- * Difference Hash (dHash) - Gradient based
- */
-function computeDHash(pixels: Uint8Array, size: number): bigint {
-  const dHashW = 9;
-  const dHashH = 8;
-  const resampled: number[] = [];
-
-  for (let y = 0; y < dHashH; y++) {
-    for (let x = 0; x < dHashW; x++) {
-      const srcX = Math.floor((x / dHashW) * size);
-      const srcY = Math.floor((y / dHashH) * size);
-      resampled.push(pixels[srcY * size + srcX]);
-    }
-  }
-
-  let hash = 0n;
-  let bit = 63;
-
-  for (let y = 0; y < dHashH; y++) {
-    for (let x = 0; x < dHashW - 1; x++) {
-      const left = resampled[y * dHashW + x];
-      const right = resampled[y * dHashW + x + 1];
-      if (left > right) {
-        hash |= 1n << BigInt(bit);
-      }
-      bit--;
-    }
-  }
-
-  return hash;
-}

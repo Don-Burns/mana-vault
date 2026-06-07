@@ -3,7 +3,7 @@ import { CardDetector, DetectionResult } from "../detection/detector.ts";
 import { computeHashesFromImageData } from "../matching/hasher.ts";
 import { HashDB } from "../matching/hashdb.ts";
 import { findMatches, MatchResult } from "../matching/matcher.ts";
-import { StagingList, type StagedCard } from "../collection/staging.ts";
+import { type StagedCard, StagingList } from "../collection/staging.ts";
 import { collectionStore, type Folder } from "../collection/store.ts";
 
 // Metadata type matching what build-hashdb.ts generates
@@ -69,7 +69,9 @@ export function ScannerView(container: HTMLElement) {
     const videoEl = el.querySelector<HTMLVideoElement>("#camera-video")!;
     const statusEl = el.querySelector<HTMLElement>("#scanner-status")!;
     const captureBtn = el.querySelector<HTMLButtonElement>("#capture-btn")!;
-    const overlayCanvas = el.querySelector<HTMLCanvasElement>("#overlay-canvas")!;
+    const overlayCanvas = el.querySelector<HTMLCanvasElement>(
+      "#overlay-canvas",
+    )!;
     const folderSelect = el.querySelector<HTMLSelectElement>("#folder-select")!;
     const stagingBtn = el.querySelector<HTMLButtonElement>("#btn-staging")!;
 
@@ -85,7 +87,9 @@ export function ScannerView(container: HTMLElement) {
     try {
       const [db, meta] = await Promise.all([
         HashDB.load("/db/hash-db.bin"),
-        fetch("/db/metadata.json").then((r) => r.json()) as Promise<CardMetadata>,
+        fetch("/db/metadata.json").then((r) => r.json()) as Promise<
+          CardMetadata
+        >,
       ]);
       hashDB = db;
       metadata = meta;
@@ -97,6 +101,7 @@ export function ScannerView(container: HTMLElement) {
 
     // Initialize detector (loads OpenCV in worker)
     detector = new CardDetector();
+    statusEl.textContent = "Card Detector initializing...";
     detector
       .waitUntilReady()
       .then(() => {
@@ -110,6 +115,7 @@ export function ScannerView(container: HTMLElement) {
       });
 
     // Initialize camera
+    statusEl.textContent = "Camera initializing...";
     camera = new Camera(videoEl);
     try {
       await camera.start({ facingMode: "environment" });
@@ -132,12 +138,16 @@ export function ScannerView(container: HTMLElement) {
       countEl.textContent = staging.totalQuantity.toString();
       stagingBtn.disabled = staging.count === 0;
     });
+
+    statusEl.textContent = "Initialization complete";
   }
 
   async function populateFolderSelect(select: HTMLSelectElement) {
     const folders = await collectionStore.getAllFolders();
     select.innerHTML = `<option value="">Select folder...</option>` +
-      folders.map((f) => `<option value="${f.id}">${escapeHtml(f.name)}</option>`).join("");
+      folders.map((f) =>
+        `<option value="${f.id}">${escapeHtml(f.name)}</option>`
+      ).join("");
 
     // Default to "Unsorted" folder
     const defaultFolder = folders.find((f) => f.isDefault);
@@ -208,7 +218,9 @@ export function ScannerView(container: HTMLElement) {
 
     if (matches.length === 0) {
       statusEl.textContent = "No match found. Try again.";
-      setTimeout(() => { statusEl.textContent = "Ready - point at a card"; }, 2000);
+      setTimeout(() => {
+        statusEl.textContent = "Ready - point at a card";
+      }, 2000);
       return;
     }
 
@@ -216,16 +228,19 @@ export function ScannerView(container: HTMLElement) {
     const illustration = metadata.illustrations[bestMatch.illustrationId];
 
     if (!illustration) {
-      statusEl.textContent = "Match found but no metadata. DB may be incomplete.";
-      setTimeout(() => { statusEl.textContent = "Ready - point at a card"; }, 2000);
+      statusEl.textContent =
+        "Match found but no metadata. DB may be incomplete.";
+      setTimeout(() => {
+        statusEl.textContent = "Ready - point at a card";
+      }, 2000);
       return;
     }
 
     // Use the most recent English printing as default
     const defaultPrinting = illustration.printings
       .filter((p) => p.lang === "en")
-      .sort((a, b) => b.released_at.localeCompare(a.released_at))[0]
-      || illustration.printings[0];
+      .sort((a, b) => b.released_at.localeCompare(a.released_at))[0] ||
+      illustration.printings[0];
 
     // Add to staging
     staging.add({
@@ -249,7 +264,9 @@ export function ScannerView(container: HTMLElement) {
     });
 
     statusEl.textContent = `${illustration.name} (${bestMatch.confidence}%)`;
-    setTimeout(() => { statusEl.textContent = "Ready - point at a card"; }, 2000);
+    setTimeout(() => {
+      statusEl.textContent = "Ready - point at a card";
+    }, 2000);
   }
 
   function handleManualCapture() {
@@ -258,7 +275,9 @@ export function ScannerView(container: HTMLElement) {
     } else {
       const statusEl = el.querySelector<HTMLElement>("#scanner-status")!;
       statusEl.textContent = "No card detected";
-      setTimeout(() => { statusEl.textContent = "Ready - point at a card"; }, 1500);
+      setTimeout(() => {
+        statusEl.textContent = "Ready - point at a card";
+      }, 1500);
     }
   }
 
@@ -278,7 +297,9 @@ export function ScannerView(container: HTMLElement) {
         </div>
         <div class="staging-actions">
           <button class="btn-sm" id="btn-clear-staging">Clear All</button>
-          <button class="btn-primary" id="btn-confirm-staging" ${!destinationFolderId ? "disabled" : ""}>
+          <button class="btn-primary" id="btn-confirm-staging" ${
+      !destinationFolderId ? "disabled" : ""
+    }>
             Add to Collection
           </button>
         </div>
@@ -291,19 +312,28 @@ export function ScannerView(container: HTMLElement) {
     el.appendChild(overlay);
 
     // Event handlers
-    overlay.querySelector("#btn-close-staging")!.addEventListener("click", () => {
-      overlay.remove();
-    });
+    overlay.querySelector("#btn-close-staging")!.addEventListener(
+      "click",
+      () => {
+        overlay.remove();
+      },
+    );
 
-    overlay.querySelector("#btn-clear-staging")!.addEventListener("click", () => {
-      staging.clear();
-      overlay.remove();
-    });
+    overlay.querySelector("#btn-clear-staging")!.addEventListener(
+      "click",
+      () => {
+        staging.clear();
+        overlay.remove();
+      },
+    );
 
-    overlay.querySelector("#btn-confirm-staging")!.addEventListener("click", async () => {
-      await confirmStaging();
-      overlay.remove();
-    });
+    overlay.querySelector("#btn-confirm-staging")!.addEventListener(
+      "click",
+      async () => {
+        await confirmStaging();
+        overlay.remove();
+      },
+    );
 
     // Remove buttons
     overlay.querySelectorAll<HTMLElement>(".staged-remove").forEach((btn) => {
@@ -355,10 +385,13 @@ export function ScannerView(container: HTMLElement) {
     }
 
     const statusEl = el.querySelector<HTMLElement>("#scanner-status")!;
-    statusEl.textContent = `Added ${staging.totalQuantity} card(s) to collection!`;
+    statusEl.textContent =
+      `Added ${staging.totalQuantity} card(s) to collection!`;
     staging.clear();
 
-    setTimeout(() => { statusEl.textContent = "Ready - point at a card"; }, 2000);
+    setTimeout(() => {
+      statusEl.textContent = "Ready - point at a card";
+    }, 2000);
   }
 
   function drawOverlay(canvas: HTMLCanvasElement, result: DetectionResult) {
@@ -404,8 +437,14 @@ export function ScannerView(container: HTMLElement) {
   }
 
   function destroy() {
-    if (camera) { camera.stop(); camera = null; }
-    if (detector) { detector.destroy(); detector = null; }
+    if (camera) {
+      camera.stop();
+      camera = null;
+    }
+    if (detector) {
+      detector.destroy();
+      detector = null;
+    }
     isProcessing = false;
     stableFrameCount = 0;
     lastCorners = null;
