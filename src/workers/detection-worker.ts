@@ -10,9 +10,9 @@ import {
   extractArtRegionsAllOrientations,
   matToImageData,
 } from "../detection/pipeline.ts";
+import type { Cv } from "../../vendor/opencv/mod.ts";
 
-// deno-lint-ignore no-explicit-any
-let cv: any = null;
+let cv: Cv | null = null;
 let isReady = false;
 
 async function initOpenCV(): Promise<void> {
@@ -54,8 +54,8 @@ export interface DetectResultMessage {
   artRegions?: ImageData[];
 }
 
-self.onmessage = async (e: MessageEvent) => {
-  if (!isReady) {
+self.onmessage = (e: MessageEvent) => {
+  if (!isReady || !cv) {
     self.postMessage({ type: "error", error: "OpenCV not ready" });
     return;
   }
@@ -63,7 +63,7 @@ self.onmessage = async (e: MessageEvent) => {
   const msg = e.data;
 
   if (msg.type === "detect") {
-    const result = detectCard(msg.imageData, msg.frameId);
+    const result = detectCard(cv, msg.imageData, msg.frameId);
     self.postMessage(result);
   }
 };
@@ -72,7 +72,11 @@ self.onmessage = async (e: MessageEvent) => {
  * Convert ImageData to Mat, run the detection pipeline, convert results
  * back to ImageData for transfer to the main thread.
  */
-function detectCard(imageData: ImageData, frameId: number): DetectResultMessage {
+function detectCard(
+  cv: Cv,
+  imageData: ImageData,
+  frameId: number,
+): DetectResultMessage {
   const src = cv.matFromImageData(imageData);
 
   try {

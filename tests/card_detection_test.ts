@@ -37,7 +37,7 @@ import {
 } from "../src/detection/pipeline.ts";
 import { identifyCardInMat } from "../src/detection/identify.ts";
 import jpeg from "npm:jpeg-js@0.4.4";
-import cv from "../vendor/opencv/mod.ts";
+import cv, { type Mat } from "../vendor/opencv/mod.ts";
 import { join } from "https://deno.land/std@0.224.0/path/mod.ts";
 
 // --- Paths ---
@@ -88,8 +88,7 @@ interface CardMetadata {
  * Deliberately performs NO rotation or other processing — the point of these
  * tests is that the pipeline handles orientation on its own.
  */
-// deno-lint-ignore no-explicit-any
-function loadImageMat(file: string): any {
+function loadImageMat(file: string): Mat {
   const fileData = Deno.readFileSync(join(INPUT_DIR, file));
   const decoded = jpeg.decode(fileData, { useTArray: true });
   const imgData = {
@@ -168,8 +167,7 @@ for (const fixture of [TEMPLE, KAITO, HEIR]) {
 
 /** Lazy-cached detection result for the low-level geometry tests. */
 let _cached: PipelineResult | undefined;
-// deno-lint-ignore no-explicit-any
-let _cachedMat: any;
+let _cachedMat: Mat;
 
 function getDetection(): PipelineResult {
   if (_cached) return _cached;

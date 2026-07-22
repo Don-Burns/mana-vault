@@ -10,6 +10,7 @@
  */
 
 import { ART_REGIONS, classifyFrameType } from "./frame-classifier.ts";
+import type { Cv, Mat, MatVector } from "../../vendor/opencv/mod.ts";
 
 // --- Types ---
 
@@ -24,11 +25,9 @@ export interface PipelineResult {
    */
   candidates?: [number, number][][];
   /** Perspective-corrected card (745×1040). Caller must call .delete(). */
-  // deno-lint-ignore no-explicit-any
-  cardMat?: any;
+  cardMat?: Mat;
   /** Extracted art region. Caller must call .delete(). */
-  // deno-lint-ignore no-explicit-any
-  artMat?: any;
+  artMat?: Mat;
 }
 
 /** Standard card output dimensions (proportional to 63 mm × 88 mm). */
@@ -46,8 +45,7 @@ const CARD_HEIGHT = 1040;
  * Returns perspective-corrected card and extracted art region as Mats.
  * Caller is responsible for deleting returned cardMat and artMat.
  */
-// deno-lint-ignore no-explicit-any
-export function detectCardInMat(cv: any, src: any): PipelineResult {
+export function detectCardInMat(cv: Cv, src: Mat): PipelineResult {
   const gray = new cv.Mat();
   const blurred = new cv.Mat();
   const edges = new cv.Mat();
@@ -166,11 +164,9 @@ export function detectCardInMat(cv: any, src: any): PipelineResult {
  * between them — e.g. to prefer a small card nested inside a larger bright
  * quad such as a sheet of paper.
  */
-// deno-lint-ignore no-explicit-any
-// deno-lint-ignore no-explicit-any
 export function collectCardQuads(
-  cv: any,
-  contours: any,
+  cv: Cv,
+  contours: MatVector,
   frameWidth: number,
   frameHeight: number,
   out: [number, number][][],
@@ -244,8 +240,7 @@ function isNestedInside(
 }
 
 /** Mean grayscale intensity within the axis-aligned bounds of a quad. */
-// deno-lint-ignore no-explicit-any
-function meanIntensity(cv: any, gray: any, points: [number, number][]): number {
+function meanIntensity(cv: Cv, gray: Mat, points: [number, number][]): number {
   const xs = points.map((p) => p[0]);
   const ys = points.map((p) => p[1]);
   const x = Math.max(0, Math.floor(Math.min(...xs)));
@@ -276,11 +271,9 @@ function meanIntensity(cv: any, gray: any, points: [number, number][]): number {
  * inward. Otherwise we fall back to the largest quad (the original behaviour
  * for clean single-card photos).
  */
-// deno-lint-ignore no-explicit-any
 export function selectCardQuad(
-  cv: any,
-  // deno-lint-ignore no-explicit-any
-  gray: any,
+  cv: Cv,
+  gray: Mat,
   candidates: [number, number][][],
 ): [number, number][] | null {
   if (candidates.length === 0) return null;
@@ -325,10 +318,9 @@ export function selectCardQuad(
  * also handle cards nested inside a larger bright quad. Retained for callers
  * that only need the single largest match.
  */
-// deno-lint-ignore no-explicit-any
 export function findCardContour(
-  cv: any,
-  contours: any,
+  cv: Cv,
+  contours: MatVector,
   frameWidth: number,
   frameHeight: number,
 ): [number, number][] | null {
@@ -428,12 +420,11 @@ export function distance(
 // ---------------------------------------------------------------------------
 
 /** Warp the detected card region to a flat 745×1040 rectangle. */
-// deno-lint-ignore no-explicit-any
 export function perspectiveWarp(
-  cv: any,
-  src: any,
+  cv: Cv,
+  src: Mat,
   corners: [number, number][],
-): any {
+): Mat {
   const ordered = orderPoints(corners);
 
   const srcPoints = cv.matFromArray(4, 1, cv.CV_32FC2, [
@@ -482,8 +473,7 @@ export function perspectiveWarp(
  * Extract the art region from a perspective-corrected card Mat.
  * Uses frame classification to determine crop bounds.
  */
-// deno-lint-ignore no-explicit-any
-export function extractArtRegion(cv: any, cardMat: any): any | null {
+export function extractArtRegion(cv: Cv, cardMat: Mat): Mat | null {
   const width = cardMat.cols;
   const height = cardMat.rows;
 
@@ -528,11 +518,9 @@ export function extractArtRegion(cv: any, cardMat: any): any | null {
  * the card: [0°, 90°, 180°, 270°]. The caller owns nothing to delete (all
  * intermediate Mats are freed here).
  */
-// deno-lint-ignore no-explicit-any
 export function extractArtRegionsAllOrientations(
-  cv: any,
-  // deno-lint-ignore no-explicit-any
-  cardMat: any,
+  cv: Cv,
+  cardMat: Mat,
 ): ImageData[] {
   const results: ImageData[] = [];
   const rotateCodes = [
@@ -543,8 +531,7 @@ export function extractArtRegionsAllOrientations(
   ];
 
   for (const code of rotateCodes) {
-    // deno-lint-ignore no-explicit-any
-    let rotated: any;
+    let rotated: Mat;
     if (code === null) {
       rotated = cardMat;
     } else {
@@ -553,8 +540,10 @@ export function extractArtRegionsAllOrientations(
     }
 
     const art = extractArtRegion(cv, rotated);
-    results.push(matToImageData(cv, art));
-    art.delete();
+    if (art) {
+      results.push(matToImageData(cv, art));
+      art.delete();
+    }
     if (rotated !== cardMat) rotated.delete();
   }
 
@@ -565,8 +554,7 @@ export function extractArtRegionsAllOrientations(
 // Utilities
 // ---------------------------------------------------------------------------
 
-// deno-lint-ignore no-explicit-any
-export function matToPoints(mat: any): [number, number][] {
+export function matToPoints(mat: Mat): [number, number][] {
   const points: [number, number][] = [];
   for (let i = 0; i < mat.rows; i++) {
     points.push([mat.intAt(i, 0), mat.intAt(i, 1)]);
@@ -574,12 +562,10 @@ export function matToPoints(mat: any): [number, number][] {
   return points;
 }
 
-// deno-lint-ignore no-explicit-any
-export function matToImageData(cv: any, mat: any): ImageData {
+export function matToImageData(cv: Cv, mat: Mat): ImageData {
   // Ensure contiguous memory — ROI mats (and clone() of ROIs in OpenCV.js)
   // have a stride wider than cols*elemSize, which makes mat.data garbled.
-  // deno-lint-ignore no-explicit-any
-  let src: any = mat;
+  let src: Mat = mat;
   let srcOwned = false;
   if (!mat.isContinuous()) {
     src = new cv.Mat();
@@ -587,8 +573,7 @@ export function matToImageData(cv: any, mat: any): ImageData {
     srcOwned = true;
   }
 
-  // deno-lint-ignore no-explicit-any
-  let rgba: any;
+  let rgba: Mat;
   if (src.channels() === 4) {
     rgba = src;
   } else if (src.channels() === 3) {

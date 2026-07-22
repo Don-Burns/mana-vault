@@ -29,6 +29,7 @@ import {
   type MatchResult,
 } from "../matching/matcher.ts";
 import type { HashDB } from "../matching/hashdb.ts";
+import type { Cv, Mat } from "../../vendor/opencv/mod.ts";
 
 /** Number of clockwise 90° turns applied to the warped card (0–3). */
 export type Orientation = 0 | 1 | 2 | 3;
@@ -109,10 +110,8 @@ export function matchArtOrientationsInSubset(
  * Handles cleanup of all intermediate Mats internally.
  */
 export function identifyCardInMat(
-  // deno-lint-ignore no-explicit-any
-  cv: any,
-  // deno-lint-ignore no-explicit-any
-  src: any,
+  cv: Cv,
+  src: Mat,
   db: HashDB,
 ): IdentifyResult {
   const detection = detectCardInMat(cv, src);
