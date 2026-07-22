@@ -9,8 +9,10 @@ A fully offline-capable Progressive Web App for scanning and managing Magic: The
 - **Auto-capture**: Automatically captures when a card is held steady in frame (stability detection across consecutive frames)
 - **Manual capture**: Tap-to-capture fallback for difficult conditions
 - **Art-based recognition**: Identifies cards by matching artwork using perceptual hashing (pHash + dHash), supporting non-English cards
+- **Orientation-robust**: Matches the card in any of the four 90° rotations, so cards held sideways/upside-down (or photos with unapplied EXIF orientation) still identify correctly
+- **Cluttered-scene detection**: Combines Canny edge and Otsu threshold contour passes to find a card even when it rests on a bright surface (e.g. a sheet of paper)
 - **Frame type awareness**: Classifies card frames (modern 2003+, old border, borderless/full-art) to correctly isolate the art region
-- **Confidence scoring**: Shows match confidence percentage; top-N candidates ranked
+- **Confidence scoring**: Shows match confidence percentage; requires ≥20% to accept a card (weaker guesses shown in red but not added); top-N candidates ranked
 
 ### Collection Management
 - **Folder system**: Organize cards into flat folders (e.g., "Trade Binder", "EDH Deck", "Bulk Rares")
@@ -87,23 +89,33 @@ A fully offline-capable Progressive Web App for scanning and managing Magic: The
 Camera Frame
     │
     ▼
-Grayscale → Gaussian Blur → Canny Edge Detection → Dilate
+Grayscale → Gaussian Blur
+    │
+    ├── Canny Edge Detection → Dilate ──┐
+    └── Otsu Threshold → Morph-Close ───┤   (two complementary candidate sources)
+                                        ▼
+                              Find Contours (RETR_LIST)
     │
     ▼
-Find Contours → Largest Quadrilateral (card-shaped aspect ratio)
+Collect ALL card-shaped quads → select best (prefer a small card nested
+inside a brighter backing, e.g. a card on paper; else the largest)
     │
     ▼
 4-Point Perspective Warp → Flat 745×1040 card image
     │
     ▼
-Frame Type Classification (border analysis)
+For each of 4 rotations (0°/90°/180°/270°):
+    Frame Type Classification → Art Region Extraction → ImageData
     │
     ▼
-Art Region Extraction (crop based on frame type)
-    │
-    ▼
-pHash + dHash computation → Hamming distance search → Top-N matches
+Main thread hashes all 4 crops → Hamming search → best match wins
+(this resolves card/photo orientation; the matcher is not rotation-invariant)
 ```
+
+The scanner overlay draws the selected card in **green** and other detected
+candidates in **yellow**, so you can see what the detector considers card-like.
+A minimum match confidence of **20%** is required to accept a card; weaker
+guesses are still shown (in red) but not added to the collection.
 
 ### Technology Stack
 
@@ -115,7 +127,7 @@ pHash + dHash computation → Hamming distance search → Top-N matches
 | Image Processing | OpenCV.js (WASM) | Card detection, perspective correction, image manipulation |
 | Hashing | Custom pHash + dHash | Perceptual hashing for art-based card identification |
 | Storage | IndexedDB | Local collection persistence with folder/card schema |
-| Offline | Service Worker | Cache app shell, WASM, hash DB for full offline use |
+| Offline | Service Worker (vite-plugin-pwa) | Cache app shell, WASM, hash DB for full offline use |
 | Card Data | Scryfall API | Bulk data download + art crop images (one-time) |
 | Image Processing (build) | Sharp | Server-side image resizing for hash computation |
 
@@ -147,6 +159,8 @@ mtg_scanner_js/
 │   │
 │   ├── detection/
 │   │   ├── detector.ts      # Main thread ↔ Worker bridge (async API)
+│   │   ├── pipeline.ts      # Core CV: contour detection, warp, art extraction (typed with Cv/Mat)
+│   │   ├── identify.ts      # Orientation resolution + hash-match orchestration
 │   │   └── frame-classifier.ts  # Classify modern/old/borderless frames
 │   │
 │   ├── matching/
@@ -172,7 +186,9 @@ mtg_scanner_js/
 │   ├── download-art.ts      # Download art_crop images (rate-limited, resumable)
 │   └── build-hashdb.ts      # Compute hashes, generate binary DB + metadata
 │
-├── tests/                    # Test directory
+├── tests/                    # Full-pipeline + unit tests (deno test)
+│   ├── card_detection_test.ts
+│   └── data/input/           # Real card photos used as fixtures
 └── dist/                     # Production build output
 ```
 
@@ -243,26 +259,33 @@ OpenCV.js (~10.8 MB WASM) runs in an ES module Web Worker to keep the UI at 60fp
 Main Thread                    Worker Thread
 ───────────                    ─────────────
 Camera frame (ImageData)  ──→  OpenCV processing:
-                               - Contour detection
+                               - Two-source contour detection
                                - Perspective warp
-                               - Art extraction
-                          ←──  Result: {corners, cardImage, artRegion}
+                               - Art extraction ×4 orientations
+                          ←──  Result: {corners, candidates, cardImage, artRegions[4]}
 
 Main thread then:
-- Draws overlay (corners on canvas)
-- Computes hash from artRegion
+- Draws overlay (selected quad green, other candidates yellow)
+- Hashes all 4 orientation crops, keeps the best DB match
 - Searches hash DB (brute-force, <5ms for 50k entries)
-- Adds match to staging list
+- Adds match to staging list (if confidence ≥ 20%)
 ```
 
 ### Service Worker Caching Strategy
+
+Built with `vite-plugin-pwa` (injectManifest mode) from the hand-written
+`src/sw.ts`. It is a **transparent no-op in the dev server** (caching Vite's
+transient dev modules would break HMR and OpenCV) and only applies real caching
+in production builds. To test offline/caching behaviour, use a production build:
+`deno task build && deno task preview`.
 
 | Asset Type | Strategy | Rationale |
 |-----------|----------|-----------|
 | HTML (navigate) | Network-first | Get latest app version |
 | JS/CSS/SVG | Stale-while-revalidate | Fast load, background update |
-| OpenCV WASM | Cache-first | Rarely changes, 10.8 MB |
-| Hash DB + metadata | Cache-first (separate cache) | Manual update when DB rebuilt |
+| OpenCV WASM | Cache-first (lazy, at runtime) | Rarely changes, ~11 MB; excluded from install precache |
+| Hash DB + metadata | Cache-first (lazy, separate cache) | Large (~15 MB); excluded from install precache |
+| App shell (HTML/CSS/JS/manifest/icon) | Precached at install | Small, needed for offline start |
 | Other requests | Network-first with cache fallback | Graceful offline |
 
 ---
