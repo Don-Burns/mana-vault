@@ -13,7 +13,10 @@ export const DATA_DIR = join(Deno.cwd(), "data");
 export const BULK_DIR = join(DATA_DIR, "bulk");
 
 /** Directory for downloaded art crop images */
-export const ART_DIR = join(DATA_DIR, "art");
+export const CROP_ART_DIR = join(DATA_DIR, "crop_art");
+
+/** Directory for full art images */
+export const FULL_ART_DIR = join(DATA_DIR, "full_art");
 
 /** Directory for generated hash database files */
 export const OUTPUT_DIR = join(DATA_DIR, "output");
@@ -38,6 +41,7 @@ export interface CardData {
   collector_number: string;
   lang: string;
   image_uri_art_crop: string; // art_crop image URL
+  image_uri_art_full: string; // full art image URL
   released_at: string;
 }
 
@@ -64,6 +68,7 @@ export interface PrintingInfo {
 /** Ensure all data directories exist */
 export async function ensureDataDirs(): Promise<void> {
   await Deno.mkdir(BULK_DIR, { recursive: true });
-  await Deno.mkdir(ART_DIR, { recursive: true });
+  await Deno.mkdir(CROP_ART_DIR, { recursive: true });
+  await Deno.mkdir(FULL_ART_DIR, { recursive: true });
   await Deno.mkdir(OUTPUT_DIR, { recursive: true });
 }

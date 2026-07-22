@@ -109,6 +109,9 @@ async function main() {
           collector_number: card.collector_number,
           lang: card.lang,
           image_uri_art_crop: card.card_faces[0].image_uris.art_crop,
+          image_uri_art_full: card.card_faces[0].image_uris.small
+            ? card.card_faces[0].image_uris.small
+            : card.card_faces[0].image_uris.normal,
           released_at: card.released_at,
         });
         seenIllustrations.add(
@@ -130,6 +133,9 @@ async function main() {
       collector_number: card.collector_number,
       lang: card.lang,
       image_uri_art_crop: card.image_uris.art_crop,
+      image_uri_art_full: card.image_uris.small
+        ? card.image_uris.small
+        : card.image_uris.normal,
       released_at: card.released_at,
     });
     seenIllustrations.add(card.illustration_id);

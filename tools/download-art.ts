@@ -13,16 +13,18 @@
  */
 
 import {
-  ART_DIR,
   BULK_DIR,
   type CardData,
+  CROP_ART_DIR,
   ensureDataDirs,
+  FULL_ART_DIR,
   RATE_LIMIT_MS,
 } from "./config.ts";
 import { join } from "https://deno.land/std@0.224.0/path/mod.ts";
 
 const CARDS_FILE = join(BULK_DIR, "cards.json");
-const PROGRESS_FILE = join(ART_DIR, ".progress.json");
+const CROP_PROGRESS_FILE = join(CROP_ART_DIR, ".progress.json");
+const FULL_ART_PROGRESS_FILE = join(FULL_ART_DIR, ".progress.json");
 const BATCH_SIZE = 100; // Save progress every N downloads
 
 interface Progress {
@@ -44,12 +46,33 @@ async function main() {
     Deno.exit(1);
     return; // unreachable but satisfies TS
   }
+  await downloadFiles(
+    cards,
+    CROP_PROGRESS_FILE,
+    CROP_ART_DIR,
+    (card) => card.image_uri_art_crop,
+  );
+  await downloadFiles(
+    cards,
+    FULL_ART_PROGRESS_FILE,
+    FULL_ART_DIR,
+    (card) => card.image_uri_art_full,
+  );
 
-  // Deduplicate by illustration_id — we only need one art_crop per unique illustration
-  const illustrationMap = new Map<string, string>(); // illustration_id → art_crop URL
+  console.log("Run 'deno task db:build' next to generate the hash database.");
+}
+
+async function downloadFiles(
+  cards: CardData[],
+  progressFile: string,
+  artDir: string,
+  getUrl: (card: CardData) => string,
+) {
+  // Deduplicate by illustration_id — we only need one art per unique illustration
+  const illustrationMap = new Map<string, string>(); // illustration_id → art URL
   for (const card of cards) {
     if (!illustrationMap.has(card.illustration_id)) {
-      illustrationMap.set(card.illustration_id, card.image_uri_art_crop);
+      illustrationMap.set(card.illustration_id, getUrl(card));
     }
   }
 
@@ -58,7 +81,7 @@ async function main() {
   // Load progress
   let progress: Progress;
   try {
-    progress = JSON.parse(await Deno.readTextFile(PROGRESS_FILE));
+    progress = JSON.parse(await Deno.readTextFile(progressFile));
     console.log(
       `Resuming: ${progress.completed.length} already downloaded, ${progress.failed.length} previously failed`,
     );
@@ -94,7 +117,7 @@ async function main() {
   for (let i = 0; i < toDownload.length; i++) {
     const [illustrationId, url] = toDownload[i];
     const filename = `${illustrationId}.jpg`;
-    const filepath = join(ART_DIR, filename);
+    const filepath = join(artDir, filename);
 
     try {
       const response = await fetch(url);
@@ -131,13 +154,13 @@ async function main() {
 
       // Save progress
       progress.lastUpdated = new Date().toISOString();
-      await Deno.writeTextFile(PROGRESS_FILE, JSON.stringify(progress));
+      await Deno.writeTextFile(progressFile, JSON.stringify(progress));
     }
   }
 
   // Final progress save
   progress.lastUpdated = new Date().toISOString();
-  await Deno.writeTextFile(PROGRESS_FILE, JSON.stringify(progress));
+  await Deno.writeTextFile(progressFile, JSON.stringify(progress));
 
   const totalTime = (Date.now() - startTime) / 1000;
   console.log("");
@@ -151,10 +174,8 @@ async function main() {
     console.log(`${failed} downloads failed. Run again to retry.`);
     // Clear failed list so they'll be retried next run
     progress.failed = [];
-    await Deno.writeTextFile(PROGRESS_FILE, JSON.stringify(progress));
+    await Deno.writeTextFile(progressFile, JSON.stringify(progress));
   }
-
-  console.log("Run 'deno task db:build' next to generate the hash database.");
 }
 
 function sleep(ms: number): Promise<void> {
