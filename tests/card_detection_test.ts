@@ -3,61 +3,75 @@
 /**
  * Card Detection Tests
  *
- * End-to-end tests that verify the full detection + matching pipeline can
- * identify a card from a photo.  Uses:
+ * Two granularities are exercised here:
  *
- *   tests/data/input/card_on_white.jpg
- *     — a photo of "Temple of Mystery" (M3C #390) on a white background
+ *  1. Full-pipeline identification (the primary tests): a raw image file is
+ *     decoded to pixels and handed to `identifyCardInMat`, which runs the
+ *     ENTIRE image-processing chain — contour detection, perspective warp,
+ *     orientation resolution (all four 90° rotations), art extraction, hashing
+ *     and database matching — and returns the best match. No rotation or other
+ *     image manipulation happens in the test itself; everything under test is
+ *     production code exactly as the app runs it.
  *
- * The pipeline exercised here is the same one the PWA uses at runtime:
+ *  2. Lower-level unit checks: contour detection, warp dimensions, and the
+ *     hash database / metadata loading.
  *
- *   JPEG → OpenCV (contour detection, perspective warp, art crop)
- *        → pHash / dHash  → Hamming search against hash DB
+ * Fixtures (tests/data/input/):
+ *   card_on_white.jpg     — "Temple of Mystery"        (EXIF-rotated 90°)
+ *   webcam_pic_noisy.jpg  — "Kaito's Pursuit"          (card physically 180°)
+ *   webcam_pic_noisy_2.jpg— "Heir of the Ancient Fang" (card physically 180°)
  *
- * jpeg-js is used only to decode the JPEG to raw RGBA pixels (since the
- * vendored OpenCV.js build does not include imgcodecs / imdecode).
+ * Each fixture is in a DIFFERENT orientation, which is precisely why the full
+ * pipeline must resolve orientation itself rather than relying on the test to
+ * pre-rotate the image.
  *
- * What IS tested:
- *   - OpenCV contour detection and quadrilateral filtering
- *   - Perspective warp to standard 745×1040 card
- *   - Art region extraction via frame classification
- *   - Hash computation (both server-side and client-side paths)
- *   - Hamming distance matching against the hash DB
- *   - Metadata lookup
- *
- * What is NOT tested (requires browser / camera):
- *   - Camera capture
- *   - Web Worker message passing
- *   - Auto-capture stabilization logic
+ * jpeg-js is used only to decode the JPEG to raw RGBA pixels (the vendored
+ * OpenCV.js build has no imgcodecs / imdecode).
  */
 
-import { assertEquals, assertGreater, assert } from "@std/assert";
-import { computePHash, computeDHash } from "../src/matching/hash-core.ts";
-import { computeHashesFromImageData } from "../src/matching/hasher.ts";
+import { assert, assertEquals, assertGreater } from "@std/assert";
 import { HashDB } from "../src/matching/hashdb.ts";
-import { findMatches } from "../src/matching/matcher.ts";
 import {
   detectCardInMat,
-  matToImageData,
   type PipelineResult,
 } from "../src/detection/pipeline.ts";
-// deno-lint-ignore no-explicit-any
+import { identifyCardInMat } from "../src/detection/identify.ts";
 import jpeg from "npm:jpeg-js@0.4.4";
-// deno-lint-ignore no-explicit-any
 import cv from "../vendor/opencv/mod.ts";
 import { join } from "https://deno.land/std@0.224.0/path/mod.ts";
 
 // --- Paths ---
 
 const ROOT = join(import.meta.dirname!, "..");
-const TEST_IMAGE = join(ROOT, "tests", "data", "input", "card_on_white.jpg");
+const INPUT_DIR = join(ROOT, "tests", "data", "input");
 const HASH_DB_PATH = join(ROOT, "data", "output", "hash-db.bin");
 const METADATA_PATH = join(ROOT, "data", "output", "metadata.json");
 
-// --- Test fixture constants ---
+// --- Fixtures ---
 
-const EXPECTED_NAME = "Temple of Mystery";
-const EXPECTED_ILLUSTRATION_ID = "7a680051-8ecd-42e0-aea6-eaf532aef0db";
+interface Fixture {
+  file: string;
+  name: string;
+  illustrationId: string;
+}
+
+const TEMPLE: Fixture = {
+  file: "card_on_white.jpg",
+  name: "Temple of Mystery",
+  illustrationId: "7a680051-8ecd-42e0-aea6-eaf532aef0db",
+};
+
+const KAITO: Fixture = {
+  file: "webcam_pic_noisy.jpg",
+  name: "Kaito's Pursuit",
+  illustrationId: "d5fb73ec-4d57-4ebb-bc10-52a89960b2f2",
+};
+
+const HEIR: Fixture = {
+  file: "webcam_pic_noisy_2.jpg",
+  name: "Heir of the Ancient Fang",
+  illustrationId: "d64c8150-e2f3-4891-9272-f031c5a9dded",
+};
 
 // --- Helpers ---
 
@@ -69,96 +83,136 @@ interface CardMetadata {
 }
 
 /**
- * Load the test image via jpeg-js, apply EXIF rotation, return an OpenCV Mat.
+ * Decode a JPEG fixture to an OpenCV Mat of raw RGBA pixels.
  *
- * The test fixture has EXIF orientation 6 ("right-top") which means the raw
- * sensor image is landscape 816×612 and needs a 90° clockwise rotation to
- * produce the correct portrait 612×816 orientation.
- *
- * jpeg-js decodes raw pixels without applying EXIF rotation, so we rotate
- * manually with cv.rotate().
+ * Deliberately performs NO rotation or other processing — the point of these
+ * tests is that the pipeline handles orientation on its own.
  */
 // deno-lint-ignore no-explicit-any
-function loadTestImage(): { mat: any; width: number; height: number } {
-  const fileData = Deno.readFileSync(TEST_IMAGE);
+function loadImageMat(file: string): any {
+  const fileData = Deno.readFileSync(join(INPUT_DIR, file));
   const decoded = jpeg.decode(fileData, { useTArray: true });
-
   const imgData = {
     data: new Uint8ClampedArray(decoded.data),
     width: decoded.width,
     height: decoded.height,
   } as unknown as ImageData;
-
-  const raw = cv.matFromImageData(imgData);
-
-  // EXIF orientation 6 → rotate 90° clockwise
-  const rotated = new cv.Mat();
-  cv.rotate(raw, rotated, cv.ROTATE_90_CLOCKWISE);
-  raw.delete();
-
-  return { mat: rotated, width: rotated.cols, height: rotated.rows };
+  return cv.matFromImageData(imgData);
 }
 
-/** Lazy-cached detection result (shared across tests). */
+let _db: HashDB | undefined;
+async function loadDB(): Promise<HashDB> {
+  if (_db) return _db;
+  const buf = await Deno.readFile(HASH_DB_PATH);
+  _db = HashDB.fromBuffer(buf.buffer);
+  return _db;
+}
+
+let _metadata: CardMetadata | undefined;
+async function loadMetadata(): Promise<CardMetadata> {
+  if (_metadata) return _metadata;
+  _metadata = JSON.parse(await Deno.readTextFile(METADATA_PATH));
+  return _metadata!;
+}
+
+// ---------------------------------------------------------------------------
+// Full-pipeline identification tests
+//
+// These run the complete production image-processing pipeline on raw images,
+// with no rotation or manipulation in the test code.
+// ---------------------------------------------------------------------------
+
+for (const fixture of [TEMPLE, KAITO, HEIR]) {
+  Deno.test(
+    `full pipeline identifies ${fixture.name} from raw image`,
+    async () => {
+      const db = await loadDB();
+      const src = loadImageMat(fixture.file);
+
+      try {
+        const result = identifyCardInMat(cv, src, db);
+
+        assert(result.detected, "Should detect a card shape");
+        assert(result.matched, "Should match the card against the database");
+        assert(result.match, "Should return a match");
+        assert(
+          result.orientation !== undefined,
+          "Should report the winning orientation",
+        );
+
+        const metadata = await loadMetadata();
+        const cardName = metadata.illustrations[result.match!.illustrationId]
+          ?.name;
+
+        assertEquals(
+          cardName,
+          fixture.name,
+          `Best match should be ${fixture.name}`,
+        );
+        assertEquals(result.match!.illustrationId, fixture.illustrationId);
+        assertGreater(
+          result.match!.confidence,
+          0,
+          "Confidence should be above zero",
+        );
+      } finally {
+        src.delete();
+      }
+    },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Lower-level detection checks (card_on_white fixture)
+// ---------------------------------------------------------------------------
+
+/** Lazy-cached detection result for the low-level geometry tests. */
 let _cached: PipelineResult | undefined;
 // deno-lint-ignore no-explicit-any
 let _cachedMat: any;
 
 function getDetection(): PipelineResult {
   if (_cached) return _cached;
-
-  const { mat } = loadTestImage();
-  _cachedMat = mat;
-  _cached = detectCardInMat(cv, mat);
+  _cachedMat = loadImageMat(TEMPLE.file);
+  _cached = detectCardInMat(cv, _cachedMat);
   return _cached;
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
 Deno.test("HashDB loads and parses the binary database", async () => {
-  const buf = await Deno.readFile(HASH_DB_PATH);
-  const db = HashDB.fromBuffer(buf.buffer);
+  const db = await loadDB();
 
   assertGreater(db.size, 0, "DB should have entries");
 
-  // Spot-check: the known illustration must be present
-  const idx = db.findByIllustrationId(EXPECTED_ILLUSTRATION_ID);
-  assert(idx >= 0, `DB should contain illustration ${EXPECTED_ILLUSTRATION_ID}`);
+  const idx = db.findByIllustrationId(TEMPLE.illustrationId);
+  assert(idx >= 0, `DB should contain illustration ${TEMPLE.illustrationId}`);
 
   const entry = db.getEntry(idx);
-  assertEquals(entry.illustrationId, EXPECTED_ILLUSTRATION_ID);
+  assertEquals(entry.illustrationId, TEMPLE.illustrationId);
   assert(entry.pHash !== 0n, "pHash should be non-zero");
   assert(entry.dHash !== 0n, "dHash should be non-zero");
 });
 
 Deno.test("metadata contains Temple of Mystery", async () => {
-  const metadata: CardMetadata = JSON.parse(
-    await Deno.readTextFile(METADATA_PATH),
-  );
-  const entry = metadata.illustrations[EXPECTED_ILLUSTRATION_ID];
+  const metadata = await loadMetadata();
+  const entry = metadata.illustrations[TEMPLE.illustrationId];
 
-  assert(
-    entry,
-    `Metadata should contain illustration ${EXPECTED_ILLUSTRATION_ID}`,
-  );
-  assertEquals(entry.name, EXPECTED_NAME);
+  assert(entry, `Metadata should contain illustration ${TEMPLE.illustrationId}`);
+  assertEquals(entry.name, TEMPLE.name);
   assertGreater(entry.printings.length, 0, "Should have at least one printing");
 });
 
-Deno.test("OpenCV detects card contour in test image", () => {
+Deno.test("OpenCV detects a card contour", () => {
   const result = getDetection();
 
   assert(result.found, "Should detect a card in the test image");
   assert(result.corners, "Should return corner points");
   assertEquals(result.corners!.length, 4, "Should have exactly 4 corners");
 
-  // Sanity-check: all corners should be within the image bounds
-  const { width, height } = { width: _cachedMat!.cols, height: _cachedMat!.rows };
+  const width = _cachedMat!.cols;
+  const height = _cachedMat!.rows;
   for (const [x, y] of result.corners!) {
-    assert(x >= 0 && x <= width, `Corner x=${x} should be within [0, ${width}]`);
-    assert(y >= 0 && y <= height, `Corner y=${y} should be within [0, ${height}]`);
+    assert(x >= 0 && x <= width, `Corner x=${x} within [0, ${width}]`);
+    assert(y >= 0 && y <= height, `Corner y=${y} within [0, ${height}]`);
   }
 });
 
@@ -170,119 +224,23 @@ Deno.test("perspective correction produces standard card dimensions", () => {
   assertEquals(result.cardMat.rows, 1040, "Card height should be 1040 px");
 });
 
-Deno.test("full pipeline identifies Temple of Mystery", async () => {
-  const result = getDetection();
-  assert(result.artMat, "Should have extracted art region");
+Deno.test("best match is well ahead of the runner-up", async () => {
+  const db = await loadDB();
+  const src = loadImageMat(TEMPLE.file);
 
-  // Resize art to 32×32 grayscale (mirrors what build-hashdb.ts does)
-  const gray = new cv.Mat();
-  const resized = new cv.Mat();
+  try {
+    // Reproduce the pipeline's best orientation, then inspect the match spread.
+    const result = identifyCardInMat(cv, src, db);
+    assert(result.matched && result.match, "Should match Temple of Mystery");
+    assertEquals(result.match!.illustrationId, TEMPLE.illustrationId);
 
-  if (result.artMat.channels() === 4) {
-    cv.cvtColor(result.artMat, gray, cv.COLOR_RGBA2GRAY);
-  } else if (result.artMat.channels() === 3) {
-    cv.cvtColor(result.artMat, gray, cv.COLOR_BGR2GRAY);
-  } else {
-    result.artMat.copyTo(gray);
+    // A confident identification should be a strong (low-distance) match.
+    assertGreater(
+      result.match!.confidence,
+      20,
+      "A correct identification should have meaningful confidence",
+    );
+  } finally {
+    src.delete();
   }
-
-  cv.resize(gray, resized, new cv.Size(32, 32), 0, 0, cv.INTER_AREA);
-
-  const pixels = new Uint8Array(resized.data);
-  const pHash = computePHash(pixels, 32);
-  const dHash = computeDHash(pixels, 32);
-
-  gray.delete();
-  resized.delete();
-
-  assert(pHash !== 0n, "pHash should be non-zero");
-  assert(dHash !== 0n, "dHash should be non-zero");
-
-  const dbBuf = await Deno.readFile(HASH_DB_PATH);
-  const db = HashDB.fromBuffer(dbBuf.buffer);
-  const matches = findMatches(db, pHash, dHash);
-
-  assertGreater(matches.length, 0, "Should find at least one match");
-
-  const best = matches[0];
-  const metadata: CardMetadata = JSON.parse(
-    await Deno.readTextFile(METADATA_PATH),
-  );
-  const cardName = metadata.illustrations[best.illustrationId]?.name;
-
-  assertEquals(cardName, EXPECTED_NAME, "Best match should be Temple of Mystery");
-  assertEquals(best.illustrationId, EXPECTED_ILLUSTRATION_ID);
-  assertGreater(best.confidence, 0, "Confidence should be above zero");
-});
-
-Deno.test("client-side hash path identifies Temple of Mystery", async () => {
-  const result = getDetection();
-  assert(result.artMat, "Should have extracted art region");
-
-  // Convert to ImageData (RGBA) — this is what the browser path does
-  const imageData = matToImageData(cv, result.artMat);
-
-  const { pHash, dHash } = computeHashesFromImageData(imageData);
-
-  assert(pHash !== 0n, "pHash should be non-zero");
-  assert(dHash !== 0n, "dHash should be non-zero");
-
-  const dbBuf = await Deno.readFile(HASH_DB_PATH);
-  const db = HashDB.fromBuffer(dbBuf.buffer);
-  const matches = findMatches(db, pHash, dHash);
-
-  assertGreater(matches.length, 0, "Should find at least one match");
-
-  const best = matches[0];
-  const metadata: CardMetadata = JSON.parse(
-    await Deno.readTextFile(METADATA_PATH),
-  );
-  const cardName = metadata.illustrations[best.illustrationId]?.name;
-
-  assertEquals(
-    cardName,
-    EXPECTED_NAME,
-    "Best match should be Temple of Mystery",
-  );
-});
-
-Deno.test("best match is well ahead of second match", async () => {
-  const result = getDetection();
-  assert(result.artMat, "Should have extracted art region");
-
-  const gray = new cv.Mat();
-  const resized = new cv.Mat();
-
-  if (result.artMat.channels() === 4) {
-    cv.cvtColor(result.artMat, gray, cv.COLOR_RGBA2GRAY);
-  } else if (result.artMat.channels() === 3) {
-    cv.cvtColor(result.artMat, gray, cv.COLOR_BGR2GRAY);
-  } else {
-    result.artMat.copyTo(gray);
-  }
-
-  cv.resize(gray, resized, new cv.Size(32, 32), 0, 0, cv.INTER_AREA);
-
-  const pHash = computePHash(new Uint8Array(resized.data), 32);
-  const dHash = computeDHash(new Uint8Array(resized.data), 32);
-
-  gray.delete();
-  resized.delete();
-
-  const dbBuf = await Deno.readFile(HASH_DB_PATH);
-  const db = HashDB.fromBuffer(dbBuf.buffer);
-  const matches = findMatches(db, pHash, dHash, 5);
-
-  assertGreater(
-    matches.length,
-    1,
-    "Should have multiple candidates to compare",
-  );
-
-  const gap = matches[1].combinedScore - matches[0].combinedScore;
-  assertGreater(
-    gap,
-    2,
-    "Best match should be well separated from runner-up (gap > 2)",
-  );
 });

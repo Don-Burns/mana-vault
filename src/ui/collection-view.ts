@@ -2,9 +2,8 @@ import { collectionStore, type Folder, type CardEntry } from "../collection/stor
 import { exportAsJSON, exportAsCSV, importFromJSON } from "../collection/export.ts";
 import { Camera } from "../camera/capture.ts";
 import { CardDetector } from "../detection/detector.ts";
-import { computeHashesFromImageData } from "../matching/hasher.ts";
 import { HashDB } from "../matching/hashdb.ts";
-import { findMatchesInSubset } from "../matching/matcher.ts";
+import { matchArtOrientationsInSubset } from "../detection/identify.ts";
 
 export function CollectionView(container: HTMLElement) {
   const el = document.createElement("div");
@@ -293,20 +292,21 @@ export function CollectionView(container: HTMLElement) {
         if (!frame) return;
 
         const result = await scanSelectDetector.detect(frame);
-        if (!result.found || !result.artRegion) return;
+        if (!result.found || !result.artRegions) return;
 
         const now = Date.now();
         if (now - lastMatchTime < MATCH_COOLDOWN) return;
 
-        // Hash the detected art
-        const { pHash, dHash } = computeHashesFromImageData(result.artRegion);
+        // Match across all four card orientations, within this folder only.
+        const best = matchArtOrientationsInSubset(
+          hashDB!,
+          result.artRegions,
+          folderIllustrations,
+        );
 
-        // Match against only cards in this folder
-        const matches = findMatchesInSubset(hashDB!, pHash, dHash, folderIllustrations, 1);
-
-        if (matches.length > 0 && matches[0].confidence > 50) {
+        if (best && best.match.confidence > 50) {
           lastMatchTime = now;
-          const match = matches[0];
+          const match = best.match;
 
           // Find the card(s) in this folder with this illustration
           const folderCards = await collectionStore.getCardsByFolder(currentFolderId!);

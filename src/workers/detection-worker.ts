@@ -5,7 +5,11 @@
  * Delegates the actual detection pipeline to ../detection/pipeline.ts.
  */
 
-import { detectCardInMat, matToImageData } from "../detection/pipeline.ts";
+import {
+  detectCardInMat,
+  extractArtRegionsAllOrientations,
+  matToImageData,
+} from "../detection/pipeline.ts";
 
 // deno-lint-ignore no-explicit-any
 let cv: any = null;
@@ -38,8 +42,16 @@ export interface DetectResultMessage {
   frameId: number;
   found: boolean;
   corners?: [number, number][];
+  /** All card-shaped candidate quads found this frame (debug/visualisation). */
+  candidates?: [number, number][][];
   cardImage?: ImageData;
-  artRegion?: ImageData;
+  /**
+   * Art-region crops for all four 90° orientations of the detected card,
+   * indexed by clockwise quarter-turns: [0°, 90°, 180°, 270°]. The main thread
+   * hashes each and keeps whichever best matches the database — this resolves
+   * card/photo orientation without the pipeline having to guess "up".
+   */
+  artRegions?: ImageData[];
 }
 
 self.onmessage = async (e: MessageEvent) => {
@@ -67,13 +79,16 @@ function detectCard(imageData: ImageData, frameId: number): DetectResultMessage 
     const result = detectCardInMat(cv, src);
 
     if (!result.found || !result.cardMat) {
-      return { type: "detect-result", frameId, found: false };
+      return {
+        type: "detect-result",
+        frameId,
+        found: false,
+        candidates: result.candidates,
+      };
     }
 
     const cardImageData = matToImageData(cv, result.cardMat);
-    const artImageData = result.artMat
-      ? matToImageData(cv, result.artMat)
-      : undefined;
+    const artRegions = extractArtRegionsAllOrientations(cv, result.cardMat);
 
     result.cardMat.delete();
     if (result.artMat) result.artMat.delete();
@@ -83,8 +98,9 @@ function detectCard(imageData: ImageData, frameId: number): DetectResultMessage 
       frameId,
       found: true,
       corners: result.corners,
+      candidates: result.candidates,
       cardImage: cardImageData,
-      artRegion: artImageData,
+      artRegions,
     };
   } finally {
     src.delete();

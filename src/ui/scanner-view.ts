@@ -1,8 +1,7 @@
 import { Camera } from "../camera/capture.ts";
 import { CardDetector, DetectionResult } from "../detection/detector.ts";
-import { computeHashesFromImageData } from "../matching/hasher.ts";
 import { HashDB } from "../matching/hashdb.ts";
-import { findMatches, MatchResult } from "../matching/matcher.ts";
+import { matchArtOrientations } from "../detection/identify.ts";
 import { type StagedCard, StagingList } from "../collection/staging.ts";
 import { collectionStore, type Folder } from "../collection/store.ts";
 
@@ -43,6 +42,11 @@ export function ScannerView(container: HTMLElement) {
   const CORNER_TOLERANCE = 15;
   let lastCaptureTime = 0;
   const CAPTURE_COOLDOWN = 2000; // ms between captures to avoid duplicates
+
+  // Minimum match confidence (%) required to accept a card into staging.
+  // Below this the guess is still shown (in red) so the user can see what the
+  // scanner thinks it is, but it is not added to the collection.
+  const MIN_CONFIDENCE = 20;
 
   el.innerHTML = `
     <div class="scanner-status" id="scanner-status">Loading...</div>
@@ -205,18 +209,15 @@ export function ScannerView(container: HTMLElement) {
   }
 
   async function handleCapture(result: DetectionResult) {
-    if (!result.artRegion || !hashDB || !metadata) return;
+    if (!result.artRegions || !hashDB || !metadata) return;
 
     const statusEl = el.querySelector<HTMLElement>("#scanner-status")!;
     statusEl.textContent = "Matching...";
 
-    // Compute hash from extracted art
-    const { pHash, dHash } = computeHashesFromImageData(result.artRegion);
+    // Match across all four card orientations, keeping the best.
+    const best = matchArtOrientations(hashDB, result.artRegions);
 
-    // Find matches
-    const matches = findMatches(hashDB, pHash, dHash);
-
-    if (matches.length === 0) {
+    if (!best) {
       statusEl.textContent = "No match found. Try again.";
       setTimeout(() => {
         statusEl.textContent = "Ready - point at a card";
@@ -224,13 +225,26 @@ export function ScannerView(container: HTMLElement) {
       return;
     }
 
-    const bestMatch = matches[0];
+    const bestMatch = best.match;
     const illustration = metadata.illustrations[bestMatch.illustrationId];
 
     if (!illustration) {
       statusEl.textContent =
         "Match found but no metadata. DB may be incomplete.";
       setTimeout(() => {
+        statusEl.textContent = "Ready - point at a card";
+      }, 2000);
+      return;
+    }
+
+    // Below the confidence threshold: show the guess (with its %) in red so the
+    // user can see what the scanner thinks it is, but do NOT add it to staging.
+    if (bestMatch.confidence < MIN_CONFIDENCE) {
+      statusEl.style.color = "#e94560";
+      statusEl.textContent =
+        `${illustration.name}? (${bestMatch.confidence}% - too low)`;
+      setTimeout(() => {
+        statusEl.style.color = "";
         statusEl.textContent = "Ready - point at a card";
       }, 2000);
       return;
@@ -263,6 +277,7 @@ export function ScannerView(container: HTMLElement) {
       })),
     });
 
+    statusEl.style.color = "";
     statusEl.textContent = `${illustration.name} (${bestMatch.confidence}%)`;
     setTimeout(() => {
       statusEl.textContent = "Ready - point at a card";
@@ -398,19 +413,40 @@ export function ScannerView(container: HTMLElement) {
     const ctx = canvas.getContext("2d")!;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+    const strokeQuad = (quad: [number, number][]) => {
+      ctx.beginPath();
+      ctx.moveTo(quad[0][0], quad[0][1]);
+      for (let i = 1; i < quad.length; i++) {
+        ctx.lineTo(quad[i][0], quad[i][1]);
+      }
+      ctx.closePath();
+      ctx.stroke();
+    };
+
+    // Debug: outline every card-shaped candidate the detector considered this
+    // frame (yellow), so it's visible what is / isn't being picked up — even
+    // when no single card is ultimately selected.
+    if (result.candidates && result.candidates.length > 0) {
+      const selected = result.corners;
+      const sameQuad = (a: [number, number][], b: [number, number][]) =>
+        a.length === b.length &&
+        a.every((p, i) => p[0] === b[i][0] && p[1] === b[i][1]);
+      ctx.strokeStyle = "rgba(255, 214, 0, 0.9)";
+      ctx.lineWidth = 2;
+      for (const quad of result.candidates) {
+        // Skip the selected quad here; it's drawn in green below.
+        if (selected && sameQuad(quad, selected)) continue;
+        strokeQuad(quad);
+      }
+    }
+
     if (result.found && result.corners) {
       const corners = result.corners;
 
       // Draw card outline
       ctx.strokeStyle = "#4caf50";
       ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.moveTo(corners[0][0], corners[0][1]);
-      for (let i = 1; i < corners.length; i++) {
-        ctx.lineTo(corners[i][0], corners[i][1]);
-      }
-      ctx.closePath();
-      ctx.stroke();
+      strokeQuad(corners);
 
       // Corner dots
       ctx.fillStyle = "#e94560";
@@ -425,13 +461,7 @@ export function ScannerView(container: HTMLElement) {
         const progress = stableFrameCount / STABLE_THRESHOLD;
         ctx.strokeStyle = `rgba(76, 175, 80, ${0.3 + progress * 0.7})`;
         ctx.lineWidth = 3 + progress * 4;
-        ctx.beginPath();
-        ctx.moveTo(corners[0][0], corners[0][1]);
-        for (let i = 1; i < corners.length; i++) {
-          ctx.lineTo(corners[i][0], corners[i][1]);
-        }
-        ctx.closePath();
-        ctx.stroke();
+        strokeQuad(corners);
       }
     }
   }

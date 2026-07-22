@@ -96,6 +96,9 @@ html, body {
   left: 0;
   width: 100%;
   height: 100%;
+  /* Match the video's object-fit so overlay coordinates (in raw video-pixel
+     space) align with the visually-cropped video feed. */
+  object-fit: cover;
 }
 
 .scanner-controls {

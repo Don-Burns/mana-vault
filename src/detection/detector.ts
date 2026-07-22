@@ -8,8 +8,15 @@
 export interface DetectionResult {
   found: boolean;
   corners?: [number, number][];
+  /** All card-shaped candidate quads found this frame (debug/visualisation). */
+  candidates?: [number, number][][];
   cardImage?: ImageData;
-  artRegion?: ImageData;
+  /**
+   * Art-region crops for all four 90° orientations of the detected card,
+   * indexed by clockwise quarter-turns: [0°, 90°, 180°, 270°]. Hash each and
+   * keep the best database match to resolve card/photo orientation.
+   */
+  artRegions?: ImageData[];
 }
 
 type DetectorState = "loading" | "ready" | "error";
@@ -55,8 +62,9 @@ export class CardDetector {
             resolve({
               found: msg.found,
               corners: msg.corners,
+              candidates: msg.candidates,
               cardImage: msg.cardImage,
-              artRegion: msg.artRegion,
+              artRegions: msg.artRegions,
             });
           }
           break;
