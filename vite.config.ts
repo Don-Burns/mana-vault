@@ -1,24 +1,46 @@
 import { defineConfig } from "npm:vite";
+import { VitePWA } from "npm:vite-plugin-pwa";
 
 export default defineConfig({
   root: ".",
   publicDir: "public",
+  plugins: [
+    VitePWA({
+      // We ship a hand-written service worker (src/sw.ts) with custom caching
+      // strategies, so use injectManifest mode: the plugin bundles our SW and
+      // injects the precache manifest (self.__WB_MANIFEST) rather than
+      // generating a SW for us.
+      strategies: "injectManifest",
+      srcDir: "src",
+      filename: "sw.ts",
+      // Emit the built worker as sw.js at the site root (matches the
+      // navigator.serviceWorker.register("/sw.js") call in main.ts).
+      injectManifest: {
+        rollupFormat: "es",
+        // The OpenCV WASM/JS bundle (~11 MB) and the hash DB / metadata under
+        // /db (~15 MB) are cached lazily at runtime by our SW (cache-first),
+        // so keep them out of the install-time precache manifest. Only
+        // precache the small app-shell assets.
+        globPatterns: ["**/*.{html,css,svg}", "manifest.json", "assets/index-*.js"],
+        globIgnores: ["db/**", "**/mod-*.js"],
+      },
+      // Serve the service worker from the dev server too, so offline/caching
+      // behaviour can be tested without a production build.
+      devOptions: {
+        enabled: true,
+        type: "module",
+      },
+      // We already maintain public/manifest.json ourselves.
+      manifest: false,
+      // Let the plugin inject the registration script. It knows the correct
+      // worker URL in both dev (dev-sw.js?dev-sw) and production (/sw.js), so
+      // we don't hard-code the path in app code.
+      injectRegister: "auto",
+    }),
+  ],
   build: {
     outDir: "dist",
     target: "es2022",
-    rollupOptions: {
-      input: {
-        main: "index.html",
-        sw: "src/sw.ts",
-      },
-      output: {
-        // Service worker must be at root with a fixed name
-        entryFileNames: (chunk) => {
-          if (chunk.name === "sw") return "sw.js";
-          return "assets/[name]-[hash].js";
-        },
-      },
-    },
   },
   worker: {
     format: "es",

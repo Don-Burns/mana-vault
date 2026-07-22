@@ -56,12 +56,9 @@ async function boot() {
   await collectionStore.open();
   await collectionStore.ensureDefaultFolder();
 
-  // Register service worker for offline support
-  if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("/sw.js").catch((err) => {
-      console.warn("Service worker registration failed:", err);
-    });
-  }
+  // Note: the service worker is registered automatically by vite-plugin-pwa
+  // (injectRegister: "auto"), which uses the correct worker URL in both dev
+  // and production.
 
   // Start the app
   new App();

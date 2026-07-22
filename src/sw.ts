@@ -1,3 +1,6 @@
+/// <reference no-default-lib="true" />
+/// <reference lib="esnext" />
+/// <reference lib="webworker" />
 /**
  * Service Worker
  *
@@ -6,12 +9,22 @@
  * - OpenCV WASM: Cache-first (rarely changes)
  * - Hash DB: Cache-first with manual update check
  * - API calls: Network-first with cache fallback
+ *
+ * Built via vite-plugin-pwa in `injectManifest` mode: the plugin replaces the
+ * `self.__WB_MANIFEST` reference below with the list of build-time precache
+ * entries. In dev, that list is effectively empty and we fall back to the
+ * static APP_SHELL list.
  */
+
+// Injected at build time by vite-plugin-pwa (empty array in dev).
+declare const self: ServiceWorkerGlobalScope & {
+  __WB_MANIFEST: Array<{ url: string; revision: string | null }>;
+};
 
 const CACHE_NAME = "mtg-scanner-v1";
 const DB_CACHE_NAME = "mtg-scanner-db-v1";
 
-// App shell files to pre-cache on install
+// Static app shell entries always pre-cached on install.
 const APP_SHELL = [
   "/",
   "/index.html",
@@ -19,19 +32,38 @@ const APP_SHELL = [
   "/icon.svg",
 ];
 
+// Build-time precache manifest (hashed JS/CSS assets). Reference it here so
+// vite-plugin-pwa's injectManifest step is satisfied; we merge its URLs into
+// the app-shell precache.
+const WB_MANIFEST = self.__WB_MANIFEST;
+const PRECACHE_URLS = [
+  ...APP_SHELL,
+  ...WB_MANIFEST.map((entry) => entry.url),
+];
+
+// In the Vite dev server there is no real precache manifest, so it is empty.
+// We use this to switch the SW into a transparent pass-through mode: caching
+// Vite's on-the-fly transformed modules / HMR assets / OpenCV WASM would serve
+// stale or broken content and break the app (e.g. the OpenCV worker fails to
+// initialise). In dev we therefore never intercept fetches.
+const IS_DEV = WB_MANIFEST.length === 0;
+
 // Install: pre-cache app shell
-self.addEventListener("install", (event: any) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(APP_SHELL);
-    }),
-  );
+self.addEventListener("install", (event: ExtendableEvent) => {
+  // Skip precaching entirely in dev (URLs are Vite-transformed, not stable).
+  if (!IS_DEV) {
+    event.waitUntil(
+      caches.open(CACHE_NAME).then((cache) => {
+        return cache.addAll(PRECACHE_URLS);
+      }),
+    );
+  }
   // Activate immediately
-  (self as any).skipWaiting();
+  self.skipWaiting();
 });
 
 // Activate: clean up old caches
-self.addEventListener("activate", (event: any) => {
+self.addEventListener("activate", (event: ExtendableEvent) => {
   event.waitUntil(
     caches.keys().then((keys) => {
       return Promise.all(
@@ -42,12 +74,23 @@ self.addEventListener("activate", (event: any) => {
     }),
   );
   // Take control of all pages immediately
-  (self as any).clients.claim();
+  self.clients.claim();
 });
 
 // Fetch: routing strategy
-self.addEventListener("fetch", (event: any) => {
+self.addEventListener("fetch", (event: FetchEvent) => {
+  // In dev, stay completely out of the way: let every request hit the Vite
+  // dev server directly. Caching dev modules / HMR / OpenCV WASM here would
+  // break the app.
+  if (IS_DEV) return;
+
   const url = new URL(event.request.url);
+
+  // Only handle same-origin GET requests; let everything else (cross-origin
+  // APIs, non-GET) go straight to the network.
+  if (event.request.method !== "GET" || url.origin !== self.location.origin) {
+    return;
+  }
 
   // Hash DB and metadata: cache-first (large, rarely changes)
   if (url.pathname.startsWith("/db/")) {
