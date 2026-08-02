@@ -1,9 +1,15 @@
-import { collectionStore, type Folder, type CardEntry } from "../collection/store.ts";
-import { exportAsJSON, exportAsCSV, importFromJSON } from "../collection/export.ts";
+import {
+  type CardEntry,
+  collectionStore,
+  type Folder,
+} from "../collection/store.ts";
+import {
+  exportAsCSV,
+  exportAsJSON,
+  importFromJSON,
+} from "../collection/export.ts";
 import { Camera } from "../camera/capture.ts";
 import { CardDetector } from "../detection/detector.ts";
-import { HashDB } from "../matching/hashdb.ts";
-import { matchArtOrientationsInSubset } from "../detection/identify.ts";
 
 export function CollectionView(container: HTMLElement) {
   const el = document.createElement("div");
@@ -16,7 +22,6 @@ export function CollectionView(container: HTMLElement) {
   let scanSelectMode = false;
   let scanSelectCamera: Camera | null = null;
   let scanSelectDetector: CardDetector | null = null;
-  let hashDB: HashDB | null = null;
 
   el.innerHTML = `
     <div class="collection-header" id="collection-header">
@@ -61,20 +66,36 @@ export function CollectionView(container: HTMLElement) {
   function init() {
     renderFolderList();
     setupEventListeners();
-    // Pre-load hash DB for scan-to-select
-    HashDB.load("/db/hash-db.bin").then((db) => { hashDB = db; }).catch(() => {});
   }
 
   function setupEventListeners() {
-    el.querySelector("#btn-add-folder")!.addEventListener("click", handleAddFolder);
+    el.querySelector("#btn-add-folder")!.addEventListener(
+      "click",
+      handleAddFolder,
+    );
     el.querySelector("#btn-export")!.addEventListener("click", handleExport);
     el.querySelector("#btn-import")!.addEventListener("click", handleImport);
     el.querySelector("#btn-back")!.addEventListener("click", handleBack);
-    el.querySelector("#btn-select-mode")!.addEventListener("click", toggleSelectMode);
-    el.querySelector("#btn-scan-select")!.addEventListener("click", startScanSelect);
-    el.querySelector("#btn-close-scan-select")!.addEventListener("click", stopScanSelect);
-    el.querySelector("#btn-move-selected")!.addEventListener("click", handleMoveSelected);
-    el.querySelector("#btn-deselect-all")!.addEventListener("click", deselectAll);
+    el.querySelector("#btn-select-mode")!.addEventListener(
+      "click",
+      toggleSelectMode,
+    );
+    el.querySelector("#btn-scan-select")!.addEventListener(
+      "click",
+      startScanSelect,
+    );
+    el.querySelector("#btn-close-scan-select")!.addEventListener(
+      "click",
+      stopScanSelect,
+    );
+    el.querySelector("#btn-move-selected")!.addEventListener(
+      "click",
+      handleMoveSelected,
+    );
+    el.querySelector("#btn-deselect-all")!.addEventListener(
+      "click",
+      deselectAll,
+    );
   }
 
   // ─── Folder List ────────────────────────────────────────────────
@@ -102,7 +123,9 @@ export function CollectionView(container: HTMLElement) {
       <div class="folder-item" data-folder-id="${folder.id}">
         <span class="folder-color" style="background:${folder.color}"></span>
         <span class="folder-name">${escapeHtml(folder.name)}</span>
-        <span class="folder-count">${cardCount} card${cardCount !== 1 ? "s" : ""}</span>
+        <span class="folder-count">${cardCount} card${
+      cardCount !== 1 ? "s" : ""
+    }</span>
       </div>
     `;
   }
@@ -128,7 +151,8 @@ export function CollectionView(container: HTMLElement) {
     const listEl = el.querySelector("#card-list")!;
 
     if (cards.length === 0) {
-      listEl.innerHTML = `<div class="empty-state">No cards in this folder.<br>Scan some cards to add them!</div>`;
+      listEl.innerHTML =
+        `<div class="empty-state">No cards in this folder.<br>Scan some cards to add them!</div>`;
       return;
     }
 
@@ -139,7 +163,10 @@ export function CollectionView(container: HTMLElement) {
       item.addEventListener("click", () => {
         if (selectMode) {
           toggleCardSelection(item.dataset.cardId!);
-          item.classList.toggle("selected", selectedCardIds.has(item.dataset.cardId!));
+          item.classList.toggle(
+            "selected",
+            selectedCardIds.has(item.dataset.cardId!),
+          );
           updateSelectionBar();
         }
       });
@@ -149,7 +176,9 @@ export function CollectionView(container: HTMLElement) {
   function renderCardItem(card: CardEntry): string {
     const isSelected = selectedCardIds.has(card.id);
     return `
-      <div class="card-item ${isSelected ? "selected" : ""}" data-card-id="${card.id}">
+      <div class="card-item ${
+      isSelected ? "selected" : ""
+    }" data-card-id="${card.id}">
         <div class="card-info">
           <span class="card-name">${escapeHtml(card.name)}</span>
           <span class="card-set">${card.setCode.toUpperCase()} #${card.collectorNumber}</span>
@@ -220,8 +249,12 @@ export function CollectionView(container: HTMLElement) {
     }
 
     // Simple folder picker using prompt (will be replaced with proper UI later)
-    const options = otherFolders.map((f, i) => `${i + 1}. ${f.name}`).join("\n");
-    const choice = prompt(`Move ${selectedCardIds.size} card(s) to:\n\n${options}\n\nEnter number:`);
+    const options = otherFolders.map((f, i) => `${i + 1}. ${f.name}`).join(
+      "\n",
+    );
+    const choice = prompt(
+      `Move ${selectedCardIds.size} card(s) to:\n\n${options}\n\nEnter number:`,
+    );
 
     if (!choice) return;
     const idx = parseInt(choice) - 1;
@@ -235,16 +268,19 @@ export function CollectionView(container: HTMLElement) {
     // Refresh
     selectedCardIds.clear();
     selectMode = false;
-    el.querySelector<HTMLButtonElement>("#btn-select-mode")!.textContent = "Select";
+    el.querySelector<HTMLButtonElement>("#btn-select-mode")!.textContent =
+      "Select";
     await renderCardList(currentFolderId!);
     updateSelectionBar();
   }
 
   // ─── Scan-to-Select Mode ───────────────────────────────────────
 
+  // Frame sampling rate for scan-to-select. See ScannerView for rationale.
+  const SCAN_SELECT_FPS = 20;
+
   async function startScanSelect() {
-    if (!currentFolderId || !hashDB) {
-      alert("Hash database not loaded. Cannot use scan-select.");
+    if (!currentFolderId) {
       return;
     }
 
@@ -258,7 +294,8 @@ export function CollectionView(container: HTMLElement) {
     const statusEl = el.querySelector<HTMLElement>("#scan-select-status")!;
 
     // Get illustration IDs in this folder for subset matching
-    const folderIllustrations = await collectionStore.getIllustrationIdsInFolder(currentFolderId);
+    const folderIllustrations = await collectionStore
+      .getIllustrationIdsInFolder(currentFolderId);
 
     if (folderIllustrations.size === 0) {
       statusEl.textContent = "Folder is empty - nothing to scan for.";
@@ -270,9 +307,13 @@ export function CollectionView(container: HTMLElement) {
     scanSelectDetector = new CardDetector();
 
     try {
-      await scanSelectCamera.start({ facingMode: "environment" });
+      await scanSelectCamera.start({
+        facingMode: "environment",
+        targetFps: SCAN_SELECT_FPS,
+      });
       await scanSelectDetector.waitUntilReady();
-      statusEl.textContent = `Scan cards to select them (${folderIllustrations.size} unique arts in folder)`;
+      statusEl.textContent =
+        `Scan cards to select them (${folderIllustrations.size} unique arts in folder)`;
     } catch (err) {
       statusEl.textContent = `Error: ${(err as Error).message}`;
       return;
@@ -284,32 +325,37 @@ export function CollectionView(container: HTMLElement) {
     const MATCH_COOLDOWN = 2000;
 
     scanSelectCamera.setFrameHandler(async () => {
-      if (isProcessing || !scanSelectDetector?.isReady || !scanSelectCamera) return;
+      if (isProcessing || !scanSelectDetector?.isReady || !scanSelectCamera) {
+        return;
+      }
       isProcessing = true;
 
       try {
         const frame = scanSelectCamera.captureFrame();
         if (!frame) return;
 
-        const result = await scanSelectDetector.detect(frame);
-        if (!result.found || !result.artRegions) return;
+        // Cheap geometry-only pass first; only pay for identification once a
+        // card is actually in frame.
+        const detection = await scanSelectDetector.detect(frame);
+        if (!detection.found) return;
 
         const now = Date.now();
         if (now - lastMatchTime < MATCH_COOLDOWN) return;
 
-        // Match across all four card orientations, within this folder only.
-        const best = matchArtOrientationsInSubset(
-          hashDB!,
-          result.artRegions,
+        // Identify in the worker, restricted to this folder's illustrations.
+        const best = await scanSelectDetector.identify(
+          frame,
           folderIllustrations,
         );
 
-        if (best && best.match.confidence > 50) {
+        if (best.match && best.match.confidence > 50) {
           lastMatchTime = now;
           const match = best.match;
 
           // Find the card(s) in this folder with this illustration
-          const folderCards = await collectionStore.getCardsByFolder(currentFolderId!);
+          const folderCards = await collectionStore.getCardsByFolder(
+            currentFolderId!,
+          );
           const matchedCards = folderCards.filter(
             (c) => c.illustrationId === match.illustrationId,
           );
@@ -320,7 +366,9 @@ export function CollectionView(container: HTMLElement) {
           }
 
           // Update UI
-          const resultsEl = el.querySelector<HTMLElement>("#scan-select-results")!;
+          const resultsEl = el.querySelector<HTMLElement>(
+            "#scan-select-results",
+          )!;
           const matchName = matchedCards[0]?.name || "Unknown";
           resultsEl.innerHTML = `
             <div class="scan-match-result">
@@ -330,11 +378,15 @@ export function CollectionView(container: HTMLElement) {
 
           // Update card list selection visual
           el.querySelectorAll<HTMLElement>(".card-item").forEach((item) => {
-            item.classList.toggle("selected", selectedCardIds.has(item.dataset.cardId!));
+            item.classList.toggle(
+              "selected",
+              selectedCardIds.has(item.dataset.cardId!),
+            );
           });
           updateSelectionBar();
 
-          statusEl.textContent = `${selectedCardIds.size} card(s) selected. Keep scanning...`;
+          statusEl.textContent =
+            `${selectedCardIds.size} card(s) selected. Keep scanning...`;
         }
       } finally {
         isProcessing = false;
@@ -379,7 +431,9 @@ export function CollectionView(container: HTMLElement) {
   function showFolderList() {
     el.querySelector<HTMLElement>("#folder-list")!.classList.remove("hidden");
     el.querySelector<HTMLElement>("#folder-detail")!.classList.add("hidden");
-    el.querySelector<HTMLElement>("#collection-header")!.classList.remove("hidden");
+    el.querySelector<HTMLElement>("#collection-header")!.classList.remove(
+      "hidden",
+    );
     el.querySelector<HTMLElement>("#selection-bar")!.classList.add("hidden");
     renderFolderList();
   }
@@ -387,7 +441,9 @@ export function CollectionView(container: HTMLElement) {
   function showFolderDetail() {
     el.querySelector<HTMLElement>("#folder-list")!.classList.add("hidden");
     el.querySelector<HTMLElement>("#folder-detail")!.classList.remove("hidden");
-    el.querySelector<HTMLElement>("#collection-header")!.classList.add("hidden");
+    el.querySelector<HTMLElement>("#collection-header")!.classList.add(
+      "hidden",
+    );
   }
 
   // ─── Folder Actions ─────────────────────────────────────────────

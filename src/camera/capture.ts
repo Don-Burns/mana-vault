@@ -2,13 +2,29 @@ export interface CameraOptions {
   facingMode?: "user" | "environment";
   width?: number;
   height?: number;
+  /**
+   * Maximum rate at which the frame handler is invoked. The detection pipeline
+   * doesn't benefit from display-rate sampling, and running it flat out burns
+   * battery, so frames are dropped to hit this cadence.
+   */
+  targetFps?: number;
 }
+
+/** Frame-handler cadence used when the caller doesn't specify one. */
+const DEFAULT_TARGET_FPS = 20;
 
 export class Camera {
   private stream: MediaStream | null = null;
   private videoEl: HTMLVideoElement;
   private animationFrameId: number | null = null;
   private onFrame: ((video: HTMLVideoElement) => void) | null = null;
+  private frameIntervalMs = 1000 / DEFAULT_TARGET_FPS;
+  private lastFrameTime = 0;
+  /**
+   * Scratch canvas reused by captureFrame/captureBlob. Allocating one per call
+   * churns several MB per second at the sampling rates used here.
+   */
+  private captureCanvas: HTMLCanvasElement | null = null;
 
   constructor(videoEl: HTMLVideoElement) {
     this.videoEl = videoEl;
@@ -19,7 +35,10 @@ export class Camera {
       facingMode = "environment",
       width = 1280,
       height = 720,
+      targetFps = DEFAULT_TARGET_FPS,
     } = options;
+
+    this.frameIntervalMs = targetFps > 0 ? 1000 / targetFps : 0;
 
     try {
       this.stream = await navigator.mediaDevices.getUserMedia({
@@ -71,37 +90,21 @@ export class Camera {
    * Capture the current video frame to a canvas and return it.
    */
   captureFrame(): ImageData | null {
-    if (!this.stream || this.videoEl.readyState < 2) {
-      return null;
-    }
+    const ctx = this.drawCurrentFrame();
+    if (!ctx) return null;
 
-    const canvas = document.createElement("canvas");
-    canvas.width = this.videoEl.videoWidth;
-    canvas.height = this.videoEl.videoHeight;
-
-    const ctx = canvas.getContext("2d")!;
-    ctx.drawImage(this.videoEl, 0, 0);
-
-    return ctx.getImageData(0, 0, canvas.width, canvas.height);
+    return ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height);
   }
 
   /**
    * Capture current frame as a blob (JPEG).
    */
   async captureBlob(quality = 0.85): Promise<Blob | null> {
-    if (!this.stream || this.videoEl.readyState < 2) {
-      return null;
-    }
-
-    const canvas = document.createElement("canvas");
-    canvas.width = this.videoEl.videoWidth;
-    canvas.height = this.videoEl.videoHeight;
-
-    const ctx = canvas.getContext("2d")!;
-    ctx.drawImage(this.videoEl, 0, 0);
+    const ctx = this.drawCurrentFrame();
+    if (!ctx) return null;
 
     return new Promise((resolve) => {
-      canvas.toBlob((blob) => resolve(blob), "image/jpeg", quality);
+      ctx.canvas.toBlob((blob) => resolve(blob), "image/jpeg", quality);
     });
   }
 
@@ -120,8 +123,14 @@ export class Camera {
   private startFrameLoop(): void {
     if (this.animationFrameId !== null) return;
 
-    const loop = () => {
-      if (this.onFrame && this.videoEl.readyState >= 2) {
+    // rAF drives the loop (it self-throttles when the tab is hidden), but the
+    // handler only fires once per frameIntervalMs.
+    const loop = (now: number) => {
+      if (
+        this.onFrame && this.videoEl.readyState >= 2 &&
+        now - this.lastFrameTime >= this.frameIntervalMs
+      ) {
+        this.lastFrameTime = now;
         this.onFrame(this.videoEl);
       }
       this.animationFrameId = requestAnimationFrame(loop);
@@ -135,5 +144,22 @@ export class Camera {
       cancelAnimationFrame(this.animationFrameId);
       this.animationFrameId = null;
     }
+    this.lastFrameTime = 0;
+  }
+
+  /** Draw the current video frame into the reusable scratch canvas. */
+  private drawCurrentFrame(): CanvasRenderingContext2D | null {
+    if (!this.stream || this.videoEl.readyState < 2) {
+      return null;
+    }
+
+    this.captureCanvas ??= document.createElement("canvas");
+    const canvas = this.captureCanvas;
+    canvas.width = this.videoEl.videoWidth;
+    canvas.height = this.videoEl.videoHeight;
+
+    const ctx = canvas.getContext("2d")!;
+    ctx.drawImage(this.videoEl, 0, 0);
+    return ctx;
   }
 }

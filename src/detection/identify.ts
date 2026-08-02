@@ -11,16 +11,19 @@
  * whichever best matches the database.
  *
  * This module deliberately keeps the OpenCV-dependent work (`identifyCardInMat`)
- * separate from the pure hash-matching work (`matchArtOrientations`): in the
- * browser, OpenCV runs in a Web Worker while the hash database lives on the main
- * thread, so the worker produces the four art crops and the main thread matches
- * them. In tests (and anywhere OpenCV and the DB coexist) `identifyCardInMat`
- * runs the whole thing in one call.
+ * separate from the pure hash-matching work (`matchArtOrientations`), but in the
+ * browser both run together inside the detection Web Worker: the worker owns
+ * OpenCV *and* the hash database, so `identifyCardInMat` is the single entry
+ * point for turning a camera frame into a card match. The main thread only ever
+ * receives the plain-data result. Per-frame preview geometry (the overlay and
+ * stability tracking) uses `detectCardInMat` directly and skips matching
+ * entirely; identification runs only once a card is detected and stable.
  */
 
 import {
   detectCardInMat,
   extractArtRegionsAllOrientations,
+  matToImageData,
 } from "./pipeline.ts";
 import { computeHashesFromImageData } from "../matching/hasher.ts";
 import {
@@ -46,6 +49,12 @@ export interface IdentifyResult {
   candidates?: [number, number][][];
   /** Corners of the selected card quad, if one was detected. */
   corners?: [number, number][];
+  /**
+   * The perspective-corrected card image, present whenever a card shape was
+   * detected. Structured-cloneable, so the worker can hand it to the UI for a
+   * thumbnail of what was actually scanned.
+   */
+  cardImage?: ImageData;
 }
 
 /**
@@ -107,12 +116,17 @@ export function matchArtOrientationsInSubset(
  * Full identification from a source image Mat: detect the card, try every 90°
  * orientation, and return the best database match.
  *
+ * When `illustrationIds` is supplied the search is restricted to those
+ * illustrations (scan-to-select within a folder); otherwise the whole database
+ * is searched.
+ *
  * Handles cleanup of all intermediate Mats internally.
  */
 export function identifyCardInMat(
   cv: Cv,
   src: Mat,
   db: HashDB,
+  illustrationIds?: Set<string>,
 ): IdentifyResult {
   const detection = detectCardInMat(cv, src);
 
@@ -126,7 +140,9 @@ export function identifyCardInMat(
 
   try {
     const artRegions = extractArtRegionsAllOrientations(cv, detection.cardMat);
-    const best = matchArtOrientations(db, artRegions);
+    const best = illustrationIds
+      ? matchArtOrientationsInSubset(db, artRegions, illustrationIds)
+      : matchArtOrientations(db, artRegions);
 
     if (!best) {
       return {
@@ -134,6 +150,7 @@ export function identifyCardInMat(
         detected: true,
         candidates: detection.candidates,
         corners: detection.corners,
+        cardImage: matToImageData(cv, detection.cardMat),
       };
     }
 
@@ -144,9 +161,38 @@ export function identifyCardInMat(
       orientation: best.orientation,
       candidates: detection.candidates,
       corners: detection.corners,
+      // Present the card the right way up, using the orientation that matched.
+      cardImage: cardImageUpright(cv, detection.cardMat, best.orientation),
     };
   } finally {
     detection.cardMat.delete();
     if (detection.artMat) detection.artMat.delete();
+  }
+}
+
+/**
+ * Render the warped card as an ImageData, rotated by the given number of
+ * clockwise quarter-turns so it appears upright to the user.
+ */
+function cardImageUpright(
+  cv: Cv,
+  cardMat: Mat,
+  orientation: Orientation,
+): ImageData {
+  if (orientation === 0) return matToImageData(cv, cardMat);
+
+  const rotateCodes = [
+    null,
+    cv.ROTATE_90_CLOCKWISE,
+    cv.ROTATE_180,
+    cv.ROTATE_90_COUNTERCLOCKWISE,
+  ];
+
+  const rotated = new cv.Mat();
+  try {
+    cv.rotate(cardMat, rotated, rotateCodes[orientation]!);
+    return matToImageData(cv, rotated);
+  } finally {
+    rotated.delete();
   }
 }

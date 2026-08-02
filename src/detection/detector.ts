@@ -2,22 +2,23 @@
  * Card Detector - Main thread interface to the detection Web Worker.
  *
  * Manages communication with the OpenCV worker and provides
- * a clean async API for card detection.
+ * a clean async API for card detection and identification.
+ *
+ * The worker owns OpenCV and the hash database; this class only ever exchanges
+ * structured-cloneable plain data with it, so the main thread stays free of the
+ * ~11 MB OpenCV bundle.
  */
+
+import type { IdentifyResult } from "./identify.ts";
 
 export interface DetectionResult {
   found: boolean;
   corners?: [number, number][];
   /** All card-shaped candidate quads found this frame (debug/visualisation). */
   candidates?: [number, number][][];
-  cardImage?: ImageData;
-  /**
-   * Art-region crops for all four 90° orientations of the detected card,
-   * indexed by clockwise quarter-turns: [0°, 90°, 180°, 270°]. Hash each and
-   * keep the best database match to resolve card/photo orientation.
-   */
-  artRegions?: ImageData[];
 }
+
+export type { IdentifyResult };
 
 type DetectorState = "loading" | "ready" | "error";
 
@@ -26,9 +27,11 @@ export class CardDetector {
   private state: DetectorState = "loading";
   private frameId = 0;
   private pendingResolves = new Map<number, (result: DetectionResult) => void>();
+  private pendingIdentifies = new Map<number, (result: IdentifyResult) => void>();
   private onReady: (() => void) | null = null;
   private onError: ((error: string) => void) | null = null;
   private readyPromise: Promise<void>;
+  private _dbSize = 0;
 
   constructor() {
     this.worker = new Worker(
@@ -47,6 +50,7 @@ export class CardDetector {
       switch (msg.type) {
         case "ready":
           this.state = "ready";
+          this._dbSize = msg.dbSize ?? 0;
           if (this.onReady) this.onReady();
           break;
 
@@ -63,8 +67,23 @@ export class CardDetector {
               found: msg.found,
               corners: msg.corners,
               candidates: msg.candidates,
+            });
+          }
+          break;
+        }
+
+        case "identify-result": {
+          const resolve = this.pendingIdentifies.get(msg.frameId);
+          if (resolve) {
+            this.pendingIdentifies.delete(msg.frameId);
+            resolve({
+              matched: msg.matched,
+              detected: msg.detected,
+              match: msg.match,
+              orientation: msg.orientation,
+              candidates: msg.candidates,
+              corners: msg.corners,
               cardImage: msg.cardImage,
-              artRegions: msg.artRegions,
             });
           }
           break;
@@ -86,8 +105,17 @@ export class CardDetector {
   }
 
   /**
-   * Detect a card in the given image data.
-   * Returns the detection result with perspective-corrected card and art region.
+   * Number of entries in the worker's hash database (0 if it failed to load,
+   * in which case detection still works but identification won't match).
+   * Only meaningful after {@link waitUntilReady} resolves.
+   */
+  get dbSize(): number {
+    return this._dbSize;
+  }
+
+  /**
+   * Locate a card in the given frame. Geometry only — cheap enough to run on
+   * every sampled frame to drive the viewfinder overlay.
    */
   async detect(imageData: ImageData): Promise<DetectionResult> {
     if (this.state !== "ready") {
@@ -107,6 +135,35 @@ export class CardDetector {
   }
 
   /**
+   * Identify the card in the given frame against the hash database. Much more
+   * expensive than {@link detect}, so call it only once a card has been
+   * detected and held steady.
+   *
+   * @param illustrationIds - Restrict matching to these illustrations
+   *   (scan-to-select within a folder).
+   */
+  async identify(
+    imageData: ImageData,
+    illustrationIds?: Set<string>,
+  ): Promise<IdentifyResult> {
+    if (this.state !== "ready") {
+      return { matched: false, detected: false };
+    }
+
+    const frameId = ++this.frameId;
+
+    return new Promise<IdentifyResult>((resolve) => {
+      this.pendingIdentifies.set(frameId, resolve);
+      this.worker.postMessage({
+        type: "identify",
+        imageData,
+        frameId,
+        illustrationIds,
+      });
+    });
+  }
+
+  /**
    * Whether the detector is ready to process frames.
    */
   get isReady(): boolean {
@@ -119,5 +176,6 @@ export class CardDetector {
   destroy(): void {
     this.worker.terminate();
     this.pendingResolves.clear();
+    this.pendingIdentifies.clear();
   }
 }

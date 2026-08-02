@@ -90,7 +90,9 @@ html, body {
   object-fit: cover;
 }
 
-.camera-container canvas {
+/* Direct child only: the overlay canvas. Nested canvases (e.g. the match
+   splash thumbnail) manage their own layout. */
+.camera-container > canvas {
   position: absolute;
   top: 0;
   left: 0;
@@ -549,4 +551,76 @@ html, body {
   background: var(--accent);
   color: white;
   border-color: var(--accent);
+}
+
+/* Matched-card splash — flashes the scanned card in the top-left corner of the
+   viewfinder when identification succeeds. */
+.match-splash {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  width: 96px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.72);
+  border: 2px solid #4caf50;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+/* Match found, but below the confidence threshold: shown for feedback only,
+   not added to staging. */
+.match-splash.rejected {
+  border-color: #e94560;
+}
+
+.match-splash canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 4px;
+}
+
+.match-splash-label {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+
+.match-splash-name {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #fff;
+  /* Card names can be long; keep the splash a fixed width. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.match-splash-confidence {
+  font-size: 0.65rem;
+  color: #4caf50;
+}
+
+.match-splash.rejected .match-splash-confidence {
+  color: #e94560;
+}
+
+.match-splash.splash-in {
+  animation: splash-in 220ms ease-out;
+}
+
+@keyframes splash-in {
+  from {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }

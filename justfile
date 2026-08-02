@@ -13,7 +13,7 @@ build:
     deno task build
 
 # Preview the production build on localhost
-preview:
+preview: build
     deno task preview
 
 # Run the test suite

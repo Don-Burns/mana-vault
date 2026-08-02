@@ -1,7 +1,5 @@
 import { Camera } from "../camera/capture.ts";
 import { CardDetector, DetectionResult } from "../detection/detector.ts";
-import { HashDB } from "../matching/hashdb.ts";
-import { matchArtOrientations } from "../detection/identify.ts";
 import { type StagedCard, StagingList } from "../collection/staging.ts";
 import { collectionStore, type Folder } from "../collection/store.ts";
 
@@ -28,17 +26,23 @@ export function ScannerView(container: HTMLElement) {
 
   let camera: Camera | null = null;
   let detector: CardDetector | null = null;
-  let hashDB: HashDB | null = null;
   let metadata: CardMetadata | null = null;
   let isProcessing = false;
   let lastDetection: DetectionResult | null = null;
+  /** The frame that produced `lastDetection`, kept so it can be identified. */
+  let lastFrame: ImageData | null = null;
   let destinationFolderId: string | null = null;
   const staging = new StagingList();
 
-  // Stability tracking for auto-capture
+  // Frame sampling rate for the detection loop. Detection doesn't benefit from
+  // display-rate sampling and running it flat out drains the battery.
+  const TARGET_FPS = 20;
+
+  // Stability tracking for auto-capture. At TARGET_FPS, 8 frames is ~0.4s of
+  // holding the card steady.
   let stableFrameCount = 0;
   let lastCorners: [number, number][] | null = null;
-  const STABLE_THRESHOLD = 15;
+  const STABLE_THRESHOLD = 8;
   const CORNER_TOLERANCE = 15;
   let lastCaptureTime = 0;
   const CAPTURE_COOLDOWN = 2000; // ms between captures to avoid duplicates
@@ -48,11 +52,22 @@ export function ScannerView(container: HTMLElement) {
   // scanner thinks it is, but it is not added to the collection.
   const MIN_CONFIDENCE = 20;
 
+  // How long the matched-card splash stays on screen.
+  const SPLASH_DURATION = 2000;
+  let splashTimer: ReturnType<typeof setTimeout> | null = null;
+
   el.innerHTML = `
     <div class="scanner-status" id="scanner-status">Loading...</div>
     <div class="camera-container">
       <video id="camera-video" playsinline autoplay muted></video>
       <canvas id="overlay-canvas"></canvas>
+      <div class="match-splash hidden" id="match-splash">
+        <canvas id="match-splash-canvas"></canvas>
+        <div class="match-splash-label">
+          <span class="match-splash-name" id="match-splash-name"></span>
+          <span class="match-splash-confidence" id="match-splash-confidence"></span>
+        </div>
+      </div>
     </div>
     <div class="scanner-controls">
       <div class="scanner-controls-left">
@@ -86,31 +101,25 @@ export function ScannerView(container: HTMLElement) {
       destinationFolderId = folderSelect.value || null;
     });
 
-    // Load hash database and metadata
-    statusEl.textContent = "Loading card database...";
+    // Load card metadata (names/printings for display). The hash database
+    // itself lives in the detection worker, alongside OpenCV.
+    statusEl.textContent = "Loading card metadata...";
     try {
-      const [db, meta] = await Promise.all([
-        HashDB.load("/db/hash-db.bin"),
-        fetch("/db/metadata.json").then((r) => r.json()) as Promise<
-          CardMetadata
-        >,
-      ]);
-      hashDB = db;
-      metadata = meta;
-      statusEl.textContent = `DB loaded: ${db.size} cards. Loading OpenCV...`;
+      metadata = await fetch("/db/metadata.json").then((r) => r.json()) as
+        CardMetadata;
     } catch {
       statusEl.textContent = "No card database found. Run db:build first.";
-      // Continue without DB — camera still works for testing
+      // Continue without metadata — camera still works for testing
     }
 
-    // Initialize detector (loads OpenCV in worker)
+    // Initialize detector (loads OpenCV and the hash DB in the worker)
     detector = new CardDetector();
     statusEl.textContent = "Card Detector initializing...";
     detector
       .waitUntilReady()
       .then(() => {
-        statusEl.textContent = hashDB
-          ? "Ready - point at a card"
+        statusEl.textContent = detector!.dbSize > 0
+          ? `Ready - point at a card (${detector!.dbSize} cards)`
           : "OpenCV ready (no DB - detection only)";
       })
       .catch((err) => {
@@ -122,7 +131,7 @@ export function ScannerView(container: HTMLElement) {
     statusEl.textContent = "Camera initializing...";
     camera = new Camera(videoEl);
     try {
-      await camera.start({ facingMode: "environment" });
+      await camera.start({ facingMode: "environment", targetFps: TARGET_FPS });
       captureBtn.disabled = false;
       overlayCanvas.width = camera.videoWidth;
       overlayCanvas.height = camera.videoHeight;
@@ -171,6 +180,7 @@ export function ScannerView(container: HTMLElement) {
 
       const result = await detector.detect(frame);
       lastDetection = result;
+      lastFrame = frame;
       drawOverlay(overlayCanvas, result);
 
       // Stability tracking
@@ -181,7 +191,7 @@ export function ScannerView(container: HTMLElement) {
             const now = Date.now();
             if (now - lastCaptureTime > CAPTURE_COOLDOWN) {
               lastCaptureTime = now;
-              await handleCapture(result);
+              await handleCapture(frame);
             }
             stableFrameCount = 0;
           }
@@ -208,16 +218,18 @@ export function ScannerView(container: HTMLElement) {
     return true;
   }
 
-  async function handleCapture(result: DetectionResult) {
-    if (!result.artRegions || !hashDB || !metadata) return;
+  async function handleCapture(frame: ImageData) {
+    if (!detector || !metadata) return;
 
     const statusEl = el.querySelector<HTMLElement>("#scanner-status")!;
     statusEl.textContent = "Matching...";
 
-    // Match across all four card orientations, keeping the best.
-    const best = matchArtOrientations(hashDB, result.artRegions);
+    // Full identification happens in the worker, which owns OpenCV and the
+    // hash database: detect → warp → hash all four orientations → match.
+    const best = await detector.identify(frame);
 
-    if (!best) {
+    const bestMatch = best.match;
+    if (!bestMatch) {
       statusEl.textContent = "No match found. Try again.";
       setTimeout(() => {
         statusEl.textContent = "Ready - point at a card";
@@ -225,7 +237,6 @@ export function ScannerView(container: HTMLElement) {
       return;
     }
 
-    const bestMatch = best.match;
     const illustration = metadata.illustrations[bestMatch.illustrationId];
 
     if (!illustration) {
@@ -243,6 +254,12 @@ export function ScannerView(container: HTMLElement) {
       statusEl.style.color = "#e94560";
       statusEl.textContent =
         `${illustration.name}? (${bestMatch.confidence}% - too low)`;
+      showMatchSplash(
+        best.cardImage,
+        illustration.name,
+        bestMatch.confidence,
+        false,
+      );
       setTimeout(() => {
         statusEl.style.color = "";
         statusEl.textContent = "Ready - point at a card";
@@ -279,14 +296,20 @@ export function ScannerView(container: HTMLElement) {
 
     statusEl.style.color = "";
     statusEl.textContent = `${illustration.name} (${bestMatch.confidence}%)`;
+    showMatchSplash(
+      best.cardImage,
+      illustration.name,
+      bestMatch.confidence,
+      true,
+    );
     setTimeout(() => {
       statusEl.textContent = "Ready - point at a card";
     }, 2000);
   }
 
   function handleManualCapture() {
-    if (lastDetection?.found) {
-      handleCapture(lastDetection);
+    if (lastDetection?.found && lastFrame) {
+      handleCapture(lastFrame);
     } else {
       const statusEl = el.querySelector<HTMLElement>("#scanner-status")!;
       statusEl.textContent = "No card detected";
@@ -409,6 +432,49 @@ export function ScannerView(container: HTMLElement) {
     }, 2000);
   }
 
+  /**
+   * Flash the scanned card image in the top-left corner along with the matched
+   * name, so the user gets immediate visual confirmation of what was read.
+   */
+  function showMatchSplash(
+    cardImage: ImageData | undefined,
+    name: string,
+    confidence: number,
+    accepted: boolean,
+  ) {
+    const splash = el.querySelector<HTMLElement>("#match-splash")!;
+    const canvas = el.querySelector<HTMLCanvasElement>("#match-splash-canvas")!;
+    const nameEl = el.querySelector<HTMLElement>("#match-splash-name")!;
+    const confidenceEl = el.querySelector<HTMLElement>(
+      "#match-splash-confidence",
+    )!;
+
+    if (cardImage) {
+      canvas.width = cardImage.width;
+      canvas.height = cardImage.height;
+      canvas.getContext("2d")!.putImageData(cardImage, 0, 0);
+      canvas.classList.remove("hidden");
+    } else {
+      canvas.classList.add("hidden");
+    }
+
+    nameEl.textContent = name;
+    confidenceEl.textContent = `${confidence}%`;
+    splash.classList.remove("hidden");
+    splash.classList.toggle("rejected", !accepted);
+
+    // Restart the entrance animation even if the splash is already showing.
+    splash.classList.remove("splash-in");
+    void splash.offsetWidth;
+    splash.classList.add("splash-in");
+
+    if (splashTimer !== null) clearTimeout(splashTimer);
+    splashTimer = setTimeout(() => {
+      splash.classList.add("hidden");
+      splashTimer = null;
+    }, SPLASH_DURATION);
+  }
+
   function drawOverlay(canvas: HTMLCanvasElement, result: DetectionResult) {
     const ctx = canvas.getContext("2d")!;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -479,6 +545,12 @@ export function ScannerView(container: HTMLElement) {
     stableFrameCount = 0;
     lastCorners = null;
     lastDetection = null;
+    lastFrame = null;
+    if (splashTimer !== null) {
+      clearTimeout(splashTimer);
+      splashTimer = null;
+    }
+    el.querySelector<HTMLElement>("#match-splash")?.classList.add("hidden");
   }
 
   return { el, init, destroy };
