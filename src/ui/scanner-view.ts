@@ -105,8 +105,9 @@ export function ScannerView(container: HTMLElement) {
     // itself lives in the detection worker, alongside OpenCV.
     statusEl.textContent = "Loading card metadata...";
     try {
-      metadata = await fetch("/db/metadata.json").then((r) => r.json()) as
-        CardMetadata;
+      metadata = await fetch("/db/metadata.json").then((r) =>
+        r.json()
+      ) as CardMetadata;
     } catch {
       statusEl.textContent = "No card database found. Run db:build first.";
       // Continue without metadata — camera still works for testing
@@ -225,7 +226,7 @@ export function ScannerView(container: HTMLElement) {
     statusEl.textContent = "Matching...";
 
     // Full identification happens in the worker, which owns OpenCV and the
-    // hash database: detect → warp → hash all four orientations → match.
+    // hash database: detect → warp → hash both portrait orientations → match.
     const best = await detector.identify(frame);
 
     const bestMatch = best.match;

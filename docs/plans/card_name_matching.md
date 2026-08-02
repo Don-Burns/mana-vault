@@ -7,7 +7,7 @@ Add two complementary, non-camera-hash paths to identify/verify cards:
 
 ## Background (current architecture)
 - Detection pipeline warps a card to a flat **745×1040** upright rect (`src/detection/pipeline.ts:423`) and extracts an art crop by frame type (`extractArtRegion`, `pipeline.ts:476`; regions in `src/detection/frame-classifier.ts:19`).
-- All 4 orientations are hashed; best art match wins (`matchArtOrientations`, `src/detection/identify.ts:57`).
+- Both portrait orientations are hashed; best art match wins (`matchArtOrientations`, `src/detection/identify.ts:57`).
 - `findMatches` returns top-N by Hamming distance (`src/matching/matcher.ts:28`); accept threshold is 20% art confidence.
 - `metadata.json` maps `illustration_id → { name, printings[] }` (`tools/config.ts:53`); English is the primary name (`tools/build-hashdb.ts:87`).
 - Scanner UI reads `metadata.illustrations[id].name` and builds staging items (`src/ui/scanner-view.ts:229,261,281`).

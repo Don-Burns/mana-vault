@@ -387,23 +387,73 @@ export function isCardShaped(points: [number, number][]): boolean {
   return ratio > 0.55 && ratio < 0.85;
 }
 
-/** Order 4 points as: top-left, top-right, bottom-right, bottom-left. */
+/**
+ * Order 4 points as: top-left, top-right, bottom-right, bottom-left
+ * (clockwise on screen, where y grows downwards).
+ *
+ * Sorting by x+y / x-y extremes is only valid for near-axis-aligned quads:
+ * around 45° of rotation the sums tie and the same corner can win two slots,
+ * yielding a self-intersecting "bow-tie" that getPerspectiveTransform will
+ * happily warp into garbage. Instead we sort by angle about the centroid,
+ * which always produces a simple (non-self-intersecting) cycle for a convex
+ * quad, then rotate that cycle to start at the top-left-most corner.
+ */
 export function orderPoints(
   points: [number, number][],
 ): [number, number][] {
-  const sorted = [...points].sort(
-    (a, b) => a[0] + a[1] - (b[0] + b[1]),
-  );
-  const tl = sorted[0];
-  const br = sorted[3];
+  const cx = (points[0][0] + points[1][0] + points[2][0] + points[3][0]) / 4;
+  const cy = (points[0][1] + points[1][1] + points[2][1] + points[3][1]) / 4;
 
-  const sortedDiff = [...points].sort(
-    (a, b) => a[0] - a[1] - (b[0] - b[1]),
+  // atan2 with y down: increasing angle sweeps clockwise on screen.
+  const cycle = [...points].sort(
+    (a, b) =>
+      Math.atan2(a[1] - cy, a[0] - cx) - Math.atan2(b[1] - cy, b[0] - cx),
   );
-  const bl = sortedDiff[0];
-  const tr = sortedDiff[3];
 
-  return [tl, tr, br, bl];
+  // Rotate so index 0 is the corner nearest the image origin.
+  let start = 0;
+  let bestSum = Infinity;
+  for (let i = 0; i < 4; i++) {
+    const sum = cycle[i][0] + cycle[i][1];
+    if (sum < bestSum) {
+      bestSum = sum;
+      start = i;
+    }
+  }
+
+  return [
+    cycle[start],
+    cycle[(start + 1) % 4],
+    cycle[(start + 2) % 4],
+    cycle[(start + 3) % 4],
+  ];
+}
+
+/**
+ * Given corners already in TL/TR/BR/BL order, rotate the cycle so that the
+ * quad's long axis runs top-to-bottom — i.e. so it maps onto an upright
+ * portrait destination rectangle.
+ *
+ * A Magic card is always taller than it is wide, so if the detected quad is
+ * wider than it is tall the card was lying sideways in the frame. Rotating the
+ * corner cycle by one step (rather than warping to a landscape destination)
+ * keeps the warp output at a constant CARD_WIDTH x CARD_HEIGHT and removes two
+ * of the four possible orientations from the downstream search.
+ *
+ * Opposite edges are averaged so that perspective foreshortening on one side
+ * cannot flip the decision.
+ */
+export function orientQuadPortrait(
+  ordered: [number, number][],
+): [number, number][] {
+  const avgWidth = (distance(ordered[0], ordered[1]) +
+    distance(ordered[3], ordered[2])) / 2;
+  const avgHeight = (distance(ordered[0], ordered[3]) +
+    distance(ordered[1], ordered[2])) / 2;
+
+  if (avgWidth <= avgHeight) return ordered;
+
+  return [ordered[3], ordered[0], ordered[1], ordered[2]];
 }
 
 export function distance(
@@ -425,7 +475,9 @@ export function perspectiveWarp(
   src: Mat,
   corners: [number, number][],
 ): Mat {
-  const ordered = orderPoints(corners);
+  // Resolve in-plane orientation geometrically so the warp output is always
+  // upright portrait, even when the card was lying sideways in the frame.
+  const ordered = orientQuadPortrait(orderPoints(corners));
 
   const srcPoints = cv.matFromArray(4, 1, cv.CV_32FC2, [
     ordered[0][0],
@@ -505,30 +557,26 @@ export function extractArtRegion(cv: Cv, cardMat: Mat): Mat | null {
 }
 
 /**
- * Extract the art region for all four 90° orientations of a card.
+ * Extract the art region for both upright orientations of a card.
  *
- * A detected card quad is warped to an upright rectangle, but the pipeline has
- * no way to know which of the four sides is the top — the card may have been
- * photographed rotated (or the source image itself may carry an unapplied EXIF
- * orientation). Rather than guessing, we return the art crop for every 90°
- * rotation so the caller can hash each and pick whichever best matches the
- * database. This makes recognition robust to card/photo orientation.
+ * `perspectiveWarp` resolves in-plane orientation geometrically (via
+ * `orientQuadPortrait`), so the warped card is always portrait and the only
+ * remaining ambiguity is whether it is the right way up or upside down — the
+ * card may have been photographed rotated, or the source image may carry an
+ * unapplied EXIF orientation. Rather than guessing, we return the art crop for
+ * both and let the caller hash each and pick whichever best matches the
+ * database.
  *
- * Returns art-region ImageDatas indexed by clockwise quarter-turns applied to
- * the card: [0°, 90°, 180°, 270°]. The caller owns nothing to delete (all
- * intermediate Mats are freed here).
+ * Returns art-region ImageDatas indexed by 180° half-turns applied to the card:
+ * [0°, 180°]. The caller owns nothing to delete (all intermediate Mats are
+ * freed here).
  */
 export function extractArtRegionsAllOrientations(
   cv: Cv,
   cardMat: Mat,
 ): ImageData[] {
   const results: ImageData[] = [];
-  const rotateCodes = [
-    null,
-    cv.ROTATE_90_CLOCKWISE,
-    cv.ROTATE_180,
-    cv.ROTATE_90_COUNTERCLOCKWISE,
-  ];
+  const rotateCodes = [null, cv.ROTATE_180];
 
   for (const code of rotateCodes) {
     let rotated: Mat;

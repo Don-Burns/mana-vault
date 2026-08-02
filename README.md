@@ -9,7 +9,7 @@ A fully offline-capable Progressive Web App for scanning and managing Magic: The
 - **Auto-capture**: Automatically captures when a card is held steady in frame (stability detection across consecutive frames)
 - **Manual capture**: Tap-to-capture fallback for difficult conditions
 - **Art-based recognition**: Identifies cards by matching artwork using perceptual hashing (pHash + dHash), supporting non-English cards
-- **Orientation-robust**: Matches the card in any of the four 90° rotations, so cards held sideways/upside-down (or photos with unapplied EXIF orientation) still identify correctly
+- **Orientation-robust**: Sideways cards are resolved geometrically from the detected quad, and both 180° flips are hashed, so cards held sideways/upside-down (or photos with unapplied EXIF orientation) still identify correctly
 - **Cluttered-scene detection**: Combines Canny edge and Otsu threshold contour passes to find a card even when it rests on a bright surface (e.g. a sheet of paper)
 - **Frame type awareness**: Classifies card frames (modern 2003+, old border, borderless/full-art) to correctly isolate the art region
 - **Confidence scoring**: Shows match confidence percentage; requires ≥20% to accept a card (weaker guesses shown in red but not added); top-N candidates ranked
@@ -104,12 +104,13 @@ inside a brighter backing, e.g. a card on paper; else the largest)
 4-Point Perspective Warp → Flat 745×1040 card image
     │
     ▼
-For each of 4 rotations (0°/90°/180°/270°):
+For each of 2 rotations (0°/180°):
     Frame Type Classification → Art Region Extraction → ImageData
     │
     ▼
-Main thread hashes all 4 crops → Hamming search → best match wins
-(this resolves card/photo orientation; the matcher is not rotation-invariant)
+Main thread hashes both crops → Hamming search → best match wins
+(the warp already resolves sideways cards from the quad's long axis; only the
+ 180° flip is ambiguous, and the matcher is not rotation-invariant)
 ```
 
 The scanner overlay draws the selected card in **green** and other detected
@@ -261,12 +262,12 @@ Main Thread                    Worker Thread
 Camera frame (ImageData)  ──→  OpenCV processing:
                                - Two-source contour detection
                                - Perspective warp
-                               - Art extraction ×4 orientations
-                          ←──  Result: {corners, candidates, cardImage, artRegions[4]}
+                               - Art extraction ×2 orientations
+                          ←──  Result: {corners, candidates, cardImage, artRegions[2]}
 
 Main thread then:
 - Draws overlay (selected quad green, other candidates yellow)
-- Hashes all 4 orientation crops, keeps the best DB match
+- Hashes both orientation crops, keeps the best DB match
 - Searches hash DB (brute-force, <5ms for 50k entries)
 - Adds match to staging list (if confidence ≥ 20%)
 ```

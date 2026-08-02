@@ -6,9 +6,10 @@
  *
  * `detectCardInMat` locates a card-shaped quad and warps it upright, but has no
  * way to tell which side is the top. The card may have been photographed
- * rotated, or the source image may carry an unapplied EXIF orientation. Rather
- * than guessing, we hash the art crop for all four 90° rotations and keep
- * whichever best matches the database.
+ * rotated, or the source image may carry an unapplied EXIF orientation. The
+ * warp resolves in-plane orientation geometrically, so the card is always
+ * portrait; rather than guessing which end is up, we hash the art crop for both
+ * 180° flips and keep whichever best matches the database.
  *
  * This module deliberately keeps the OpenCV-dependent work (`identifyCardInMat`)
  * separate from the pure hash-matching work (`matchArtOrientations`), but in the
@@ -34,8 +35,8 @@ import {
 import type { HashDB } from "../matching/hashdb.ts";
 import type { Cv, Mat } from "../../vendor/opencv/mod.ts";
 
-/** Number of clockwise 90° turns applied to the warped card (0–3). */
-export type Orientation = 0 | 1 | 2 | 3;
+/** Number of 180° half-turns applied to the warped card (0 or 1). */
+export type Orientation = 0 | 1;
 
 export interface IdentifyResult {
   /** True if a card shape was detected AND matched to the database. */
@@ -43,7 +44,7 @@ export interface IdentifyResult {
   /** True if a card *shape* was detected, regardless of whether it matched. */
   detected: boolean;
   match?: MatchResult;
-  /** Which 90° rotation of the warped card produced the best match. */
+  /** Which 180° rotation of the warped card produced the best match. */
   orientation?: Orientation;
   /** Card-shape candidate quads found this frame (debug/visualisation). */
   candidates?: [number, number][][];
@@ -58,8 +59,8 @@ export interface IdentifyResult {
 }
 
 /**
- * Given the four orientation art crops of a detected card, find the best
- * database match across all of them.
+ * Given the orientation art crops of a detected card, find the best database
+ * match across all of them.
  *
  * Pure (no OpenCV): safe to run on the main thread with the loaded hash DB.
  */
@@ -113,8 +114,8 @@ export function matchArtOrientationsInSubset(
 }
 
 /**
- * Full identification from a source image Mat: detect the card, try every 90°
- * orientation, and return the best database match.
+ * Full identification from a source image Mat: detect the card, try both
+ * upright orientations, and return the best database match.
  *
  * When `illustrationIds` is supplied the search is restricted to those
  * illustrations (scan-to-select within a folder); otherwise the whole database
@@ -181,12 +182,7 @@ function cardImageUpright(
 ): ImageData {
   if (orientation === 0) return matToImageData(cv, cardMat);
 
-  const rotateCodes = [
-    null,
-    cv.ROTATE_90_CLOCKWISE,
-    cv.ROTATE_180,
-    cv.ROTATE_90_COUNTERCLOCKWISE,
-  ];
+  const rotateCodes = [null, cv.ROTATE_180];
 
   const rotated = new cv.Mat();
   try {

@@ -8,13 +8,14 @@
  *  1. Full-pipeline identification (the primary tests): a raw image file is
  *     decoded to pixels and handed to `identifyCardInMat`, which runs the
  *     ENTIRE image-processing chain — contour detection, perspective warp,
- *     orientation resolution (all four 90° rotations), art extraction, hashing
+ *     orientation resolution (geometric, plus both 180° flips), art extraction,
+ *     hashing
  *     and database matching — and returns the best match. No rotation or other
  *     image manipulation happens in the test itself; everything under test is
  *     production code exactly as the app runs it.
  *
- *  2. Lower-level unit checks: contour detection, warp dimensions, and the
- *     hash database / metadata loading.
+ *  2. Lower-level unit checks: corner ordering, quad orientation, contour
+ *     detection, warp dimensions, and the hash database / metadata loading.
  *
  * Fixtures (tests/data/input/):
  *   card_on_white.jpg     — "Temple of Mystery"        (EXIF-rotated 90°)
@@ -33,6 +34,8 @@ import { assert, assertEquals, assertGreater } from "@std/assert";
 import { HashDB } from "../src/matching/hashdb.ts";
 import {
   detectCardInMat,
+  orderPoints,
+  orientQuadPortrait,
   type PipelineResult,
 } from "../src/detection/pipeline.ts";
 import { identifyCardInMat } from "../src/detection/identify.ts";
@@ -72,6 +75,12 @@ const HEIR: Fixture = {
   name: "Heir of the Ancient Fang",
   illustrationId: "d64c8150-e2f3-4891-9272-f031c5a9dded",
 };
+
+const FIXTURES: Fixture[] = [
+  TEMPLE,
+  KAITO,
+  HEIR,
+];
 
 // --- Helpers ---
 
@@ -121,7 +130,7 @@ async function loadMetadata(): Promise<CardMetadata> {
 // with no rotation or manipulation in the test code.
 // ---------------------------------------------------------------------------
 
-for (const fixture of [TEMPLE, KAITO, HEIR]) {
+for (const fixture of FIXTURES) {
   Deno.test(
     `full pipeline identifies ${fixture.name} from raw image`,
     async () => {
@@ -135,8 +144,8 @@ for (const fixture of [TEMPLE, KAITO, HEIR]) {
         assert(result.matched, "Should match the card against the database");
         assert(result.match, "Should return a match");
         assert(
-          result.orientation !== undefined,
-          "Should report the winning orientation",
+          result.orientation === 0 || result.orientation === 1,
+          `Orientation should be 0 or 1, got ${result.orientation}`,
         );
 
         const metadata = await loadMetadata();
@@ -160,6 +169,128 @@ for (const fixture of [TEMPLE, KAITO, HEIR]) {
     },
   );
 }
+
+// ---------------------------------------------------------------------------
+// Quad geometry unit tests (pure, no OpenCV)
+// ---------------------------------------------------------------------------
+
+/** Rotate a point about the origin by `deg` (screen coords, y down). */
+function rotate(
+  [x, y]: [number, number],
+  deg: number,
+): [number, number] {
+  const r = (deg * Math.PI) / 180;
+  return [x * Math.cos(r) - y * Math.sin(r), x * Math.sin(r) + y * Math.cos(r)];
+}
+
+/** True if the 4-point cycle has no self-intersection (a simple polygon). */
+function isSimpleQuad(q: [number, number][]): boolean {
+  const cross = (
+    o: [number, number],
+    a: [number, number],
+    b: [number, number],
+  ) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+
+  // A simple quad traversed in order has consistently-signed turns.
+  const signs = [0, 1, 2, 3].map((i) =>
+    Math.sign(cross(q[i], q[(i + 1) % 4], q[(i + 2) % 4]))
+  );
+  return signs.every((s) => s > 0) || signs.every((s) => s < 0);
+}
+
+Deno.test("orderPoints returns TL/TR/BR/BL for an axis-aligned quad", () => {
+  const tl: [number, number] = [10, 20];
+  const tr: [number, number] = [110, 20];
+  const br: [number, number] = [110, 160];
+  const bl: [number, number] = [10, 160];
+
+  // Deliberately shuffled input.
+  const ordered = orderPoints([br, bl, tr, tl]);
+
+  assertEquals(ordered, [tl, tr, br, bl]);
+});
+
+Deno.test("orderPoints yields a simple cycle at any rotation", () => {
+  // A portrait card-ish rectangle centred on the origin.
+  const base: [number, number][] = [
+    [-50, -70],
+    [50, -70],
+    [50, 70],
+    [-50, 70],
+  ];
+
+  for (let deg = 0; deg < 360; deg += 5) {
+    const rotated = base.map((p) =>
+      // Translate away from the origin so all coords stay positive-ish.
+      [rotate(p, deg)[0] + 500, rotate(p, deg)[1] + 500] as [number, number]
+    );
+    const ordered = orderPoints(rotated);
+
+    assertEquals(ordered.length, 4, `4 corners at ${deg}°`);
+    assert(
+      isSimpleQuad(ordered),
+      `Ordering at ${deg}° must not self-intersect: ${JSON.stringify(ordered)}`,
+    );
+    // Every input corner must appear exactly once.
+    for (const p of rotated) {
+      assertEquals(
+        ordered.filter((o) => o[0] === p[0] && o[1] === p[1]).length,
+        1,
+        `Corner ${JSON.stringify(p)} appears exactly once at ${deg}°`,
+      );
+    }
+  }
+});
+
+Deno.test("orderPoints handles a 45° rotated quad", () => {
+  // The degenerate case for the old x+y / x-y extreme sort: a diamond, where
+  // two corners share the same x+y and two share the same x-y.
+  const diamond: [number, number][] = [
+    [100, 0],
+    [200, 100],
+    [100, 200],
+    [0, 100],
+  ];
+
+  const ordered = orderPoints(diamond);
+  assert(isSimpleQuad(ordered), "Diamond ordering must not self-intersect");
+  assertEquals(new Set(ordered.map((p) => p.join(","))).size, 4);
+});
+
+Deno.test("orientQuadPortrait leaves a portrait quad alone", () => {
+  const portrait: [number, number][] = [
+    [0, 0],
+    [100, 0],
+    [100, 200],
+    [0, 200],
+  ];
+
+  assertEquals(orientQuadPortrait(portrait), portrait);
+});
+
+Deno.test("orientQuadPortrait rotates a landscape quad upright", () => {
+  const landscape: [number, number][] = [
+    [0, 0],
+    [200, 0],
+    [200, 100],
+    [0, 100],
+  ];
+
+  const oriented = orientQuadPortrait(landscape);
+
+  // Cycle rotated by one step: the long edge now runs top-to-bottom.
+  assertEquals(oriented, [[0, 100], [0, 0], [200, 0], [200, 100]]);
+
+  const width = Math.hypot(
+    oriented[1][0] - oriented[0][0],
+    oriented[1][1] - oriented[0][1],
+  );
+  const height = Math.hypot(
+    oriented[3][0] - oriented[0][0],
+    oriented[3][1] - oriented[0][1],
+  );
+  assertGreater(height, width, "Long axis should run top-to-bottom");
+});
 
 // ---------------------------------------------------------------------------
 // Lower-level detection checks (card_on_white fixture)
@@ -194,7 +325,10 @@ Deno.test("metadata contains Temple of Mystery", async () => {
   const metadata = await loadMetadata();
   const entry = metadata.illustrations[TEMPLE.illustrationId];
 
-  assert(entry, `Metadata should contain illustration ${TEMPLE.illustrationId}`);
+  assert(
+    entry,
+    `Metadata should contain illustration ${TEMPLE.illustrationId}`,
+  );
   assertEquals(entry.name, TEMPLE.name);
   assertGreater(entry.printings.length, 0, "Should have at least one printing");
 });

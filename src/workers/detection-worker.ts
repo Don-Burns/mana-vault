@@ -8,7 +8,7 @@
  *   - "detect": where is the card in this frame? Geometry only, cheap enough to
  *     run on every sampled frame to drive the viewfinder overlay.
  *   - "identify": which card is this? Runs the full `identifyCardInMat`
- *     pipeline (detect → warp → hash all four orientations → match). The main
+ *     pipeline (detect → warp → hash both portrait orientations → match). The main
  *     thread only asks this once a card has been detected and held steady.
  *
  * Keeping the database here means the main thread never needs OpenCV, and the
@@ -16,7 +16,10 @@
  */
 
 import { detectCardInMat } from "../detection/pipeline.ts";
-import { identifyCardInMat, type IdentifyResult } from "../detection/identify.ts";
+import {
+  identifyCardInMat,
+  type IdentifyResult,
+} from "../detection/identify.ts";
 import { HashDB } from "../matching/hashdb.ts";
 import type { Cv } from "../../vendor/opencv/mod.ts";
 
@@ -125,7 +128,7 @@ function detectCard(
 }
 
 /**
- * Full identification: detect, warp, hash all four orientations and match
+ * Full identification: detect, warp, hash both orientations and match
  * against the database.
  */
 function identifyCard(
