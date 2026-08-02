@@ -11,6 +11,12 @@ An offline-first PWA for scanning Magic: The Gathering cards with a phone camera
 
 ## Quick Reference
 
+### Documentation
+
+Documentation around high-level behaviour, architecture, and design decisions is in the `docs/` folder.
+
+Features yet to be implemented are tracked in `docs/plans/` (with some design notes).
+
 ### Commands
 
 ```sh
@@ -40,14 +46,14 @@ dist/
 
 ### Key Directories
 
-| Path | Purpose |
-|------|---------|
-| `src/` | PWA source (Vite bundles this) |
-| `src/workers/` | Web Worker for OpenCV (runs off main thread) |
-| `tools/` | Deno CLI scripts for building the hash database |
+| Path             | Purpose                                                        |
+| ---------------- | -------------------------------------------------------------- |
+| `src/`           | PWA source (Vite bundles this)                                 |
+| `src/workers/`   | Web Worker for OpenCV (runs off main thread)                   |
+| `tools/`         | Deno CLI scripts for building the hash database                |
 | `vendor/opencv/` | Vendored OpenCV.js 4.13.0 (WASM embedded, downloaded via task) |
-| `public/db/` | Generated hash DB + metadata (gitignored, built by tools) |
-| `data/` | Downloaded Scryfall data (gitignored, large) |
+| `public/db/`     | Generated hash DB + metadata (gitignored, built by tools)      |
+| `data/`          | Downloaded Scryfall data (gitignored, large)                   |
 
 ## Architecture at a Glance
 
@@ -212,36 +218,36 @@ via `vite-plugin-pwa` in `injectManifest` mode. Key points:
 
 ### src/
 
-| File | Lines | What It Does |
-|------|-------|-------------|
-| `main.ts` | 74 | Boot: open IndexedDB, create App with view routing (SW auto-registered by vite-plugin-pwa) |
-| `styles.css` | 549 | All CSS. Dark theme via custom properties. Nav forced to bottom with `order: 1`. Overlay canvas uses `object-fit: cover` to align with the `cover` video feed |
-| `sw.ts` | ~150 | Hand-written service worker built via vite-plugin-pwa (injectManifest). Transparent pass-through in dev; cache-first WASM/DB + stale-while-revalidate assets in prod |
-| `camera/capture.ts` | 139 | Camera class wrapping getUserMedia. Frame handler loop via rAF |
-| `detection/detector.ts` | ~125 | Main thread ↔ Worker bridge. Async `detect(ImageData)` → `DetectionResult` (found, corners, candidates, cardImage, artRegions[]) |
-| `detection/pipeline.ts` | ~600 | Core detection: two-source contour detection (Canny + Otsu), nested-quad selection, perspective warp, art extraction, all-4-orientation art crops. Typed with `Cv`/`Mat`. Shared by worker and tests |
-| `detection/identify.ts` | ~150 | Orientation resolution + matching orchestration: `matchArtOrientations`, `matchArtOrientationsInSubset`, `identifyCardInMat`. Keeps OpenCV work separate from pure hash-matching |
-| `detection/frame-classifier.ts` | ~90 | Classify card frame type by border thickness. Exports `ART_REGIONS` crop ratios |
-| `workers/detection-worker.ts` | ~110 | Thin wrapper: loads OpenCV, converts ImageData→Mat, delegates to pipeline.ts, returns candidates + 4 orientation art crops |
-| `matching/hasher.ts` | ~65 | Client-side ImageData → 32×32 grayscale (area-averaged) → hash-core.ts |
-| `matching/hash-core.ts` | 88 | Shared pHash (DCT) + dHash (gradient) algorithms. Used by both client and build tool |
-| `matching/hashdb.ts` | 159 | Parse binary hash DB into BigUint64Array. Private constructor, use `HashDB.load()` |
-| `matching/matcher.ts` | 145 | Hamming distance brute-force search. 60/40 pHash/dHash weighting. Confidence via exp decay |
-| `collection/store.ts` | 423 | IndexedDB singleton. Folders + cards CRUD, move with quantity split/merge, export/import |
-| `collection/staging.ts` | 147 | In-memory staging list with change notification. Deduplicates by scryfallId |
-| `collection/export.ts` | 129 | JSON/CSV export, JSON import. Import is destructive (clears first) |
-| `ui/scanner-view.ts` | ~490 | Camera + detection + matching + staging. Auto-capture after 15 stable frames. Draws green box on detection + yellow candidate boxes. Enforces 20% min confidence (below → red status text, not staged) |
-| `ui/collection-view.ts` | ~440 | Folder list + card list + manual select + scan-to-select (orientation-robust) + move flow |
+| File                            | Lines | What It Does                                                                                                                                                                                           |
+| ------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `main.ts`                       | 74    | Boot: open IndexedDB, create App with view routing (SW auto-registered by vite-plugin-pwa)                                                                                                             |
+| `styles.css`                    | 549   | All CSS. Dark theme via custom properties. Nav forced to bottom with `order: 1`. Overlay canvas uses `object-fit: cover` to align with the `cover` video feed                                          |
+| `sw.ts`                         | ~150  | Hand-written service worker built via vite-plugin-pwa (injectManifest). Transparent pass-through in dev; cache-first WASM/DB + stale-while-revalidate assets in prod                                   |
+| `camera/capture.ts`             | 139   | Camera class wrapping getUserMedia. Frame handler loop via rAF                                                                                                                                         |
+| `detection/detector.ts`         | ~125  | Main thread ↔ Worker bridge. Async `detect(ImageData)` → `DetectionResult` (found, corners, candidates, cardImage, artRegions[])                                                                       |
+| `detection/pipeline.ts`         | ~600  | Core detection: two-source contour detection (Canny + Otsu), nested-quad selection, perspective warp, art extraction, all-4-orientation art crops. Typed with `Cv`/`Mat`. Shared by worker and tests   |
+| `detection/identify.ts`         | ~150  | Orientation resolution + matching orchestration: `matchArtOrientations`, `matchArtOrientationsInSubset`, `identifyCardInMat`. Keeps OpenCV work separate from pure hash-matching                       |
+| `detection/frame-classifier.ts` | ~90   | Classify card frame type by border thickness. Exports `ART_REGIONS` crop ratios                                                                                                                        |
+| `workers/detection-worker.ts`   | ~110  | Thin wrapper: loads OpenCV, converts ImageData→Mat, delegates to pipeline.ts, returns candidates + 4 orientation art crops                                                                             |
+| `matching/hasher.ts`            | ~65   | Client-side ImageData → 32×32 grayscale (area-averaged) → hash-core.ts                                                                                                                                 |
+| `matching/hash-core.ts`         | 88    | Shared pHash (DCT) + dHash (gradient) algorithms. Used by both client and build tool                                                                                                                   |
+| `matching/hashdb.ts`            | 159   | Parse binary hash DB into BigUint64Array. Private constructor, use `HashDB.load()`                                                                                                                     |
+| `matching/matcher.ts`           | 145   | Hamming distance brute-force search. 60/40 pHash/dHash weighting. Confidence via exp decay                                                                                                             |
+| `collection/store.ts`           | 423   | IndexedDB singleton. Folders + cards CRUD, move with quantity split/merge, export/import                                                                                                               |
+| `collection/staging.ts`         | 147   | In-memory staging list with change notification. Deduplicates by scryfallId                                                                                                                            |
+| `collection/export.ts`          | 129   | JSON/CSV export, JSON import. Import is destructive (clears first)                                                                                                                                     |
+| `ui/scanner-view.ts`            | ~490  | Camera + detection + matching + staging. Auto-capture after 15 stable frames. Draws green box on detection + yellow candidate boxes. Enforces 20% min confidence (below → red status text, not staged) |
+| `ui/collection-view.ts`         | ~440  | Folder list + card list + manual select + scan-to-select (orientation-robust) + move flow                                                                                                              |
 
 ### tools/
 
-| File | Lines | What It Does |
-|------|-------|-------------|
-| `config.ts` | 69 | Shared paths, types, constants (rate limit, hash size, Scryfall URL) |
-| `download-bulk.ts` | 169 | Fetch Scryfall bulk JSON, extract fields, handle DFCs, write cards.json |
-| `download-art.ts` | 177 | Download art_crop JPEGs per illustration_id. Rate-limited, resumable via .progress.json |
-| `build-hashdb.ts` | 230 | Compute hashes with sharp (imports hash-core.ts), write binary DB + metadata JSON, copy to public/db/ |
-| `download-opencv.ts` | ~80 | Download OpenCV.js 4.13.0 from GitHub, patch for Deno, write to vendor/opencv/opencv.cjs |
+| File                 | Lines | What It Does                                                                                          |
+| -------------------- | ----- | ----------------------------------------------------------------------------------------------------- |
+| `config.ts`          | 69    | Shared paths, types, constants (rate limit, hash size, Scryfall URL)                                  |
+| `download-bulk.ts`   | 169   | Fetch Scryfall bulk JSON, extract fields, handle DFCs, write cards.json                               |
+| `download-art.ts`    | 177   | Download art_crop JPEGs per illustration_id. Rate-limited, resumable via .progress.json               |
+| `build-hashdb.ts`    | 230   | Compute hashes with sharp (imports hash-core.ts), write binary DB + metadata JSON, copy to public/db/ |
+| `download-opencv.ts` | ~80   | Download OpenCV.js 4.13.0 from GitHub, patch for Deno, write to vendor/opencv/opencv.cjs              |
 
 ## Detection Pipeline Details
 
