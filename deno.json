@@ -6,6 +6,7 @@
     "db:download": "deno run -A tools/download-bulk.ts",
     "db:art": "deno run -A tools/download-art.ts",
     "db:build": "deno run -A tools/build-hashdb.ts",
+    "bench:matcher": "deno run -A docs/benchmarks/bench-matcher.ts",
     "opencv:download": "deno run -A tools/download-opencv.ts",
     "test": "deno test -A"
   },

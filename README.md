@@ -1,29 +1,49 @@
 # MTG Card Scanner PWA
 
-A fully offline-capable Progressive Web App for scanning and managing Magic: The Gathering card collections. Uses computer vision (OpenCV.js) and perceptual hashing to identify cards by their artwork — no internet required at scan time.
+A fully offline-capable Progressive Web App for scanning and managing Magic: The
+Gathering card collections. Uses computer vision (OpenCV.js) and perceptual
+hashing to identify cards by their artwork — no internet required at scan time.
 
 ## Features
 
 ### Card Scanning
-- **Camera-based detection**: Real-time card detection using rear camera with live overlay showing detected card outline
-- **Auto-capture**: Automatically captures when a card is held steady in frame (stability detection across consecutive frames)
+
+- **Camera-based detection**: Real-time card detection using rear camera with
+  live overlay showing detected card outline
+- **Auto-capture**: Automatically captures when a card is held steady in frame
+  (stability detection across consecutive frames)
 - **Manual capture**: Tap-to-capture fallback for difficult conditions
-- **Art-based recognition**: Identifies cards by matching artwork using perceptual hashing (pHash + dHash), supporting non-English cards
-- **Orientation-robust**: Sideways cards are resolved geometrically from the detected quad, and both 180° flips are hashed, so cards held sideways/upside-down (or photos with unapplied EXIF orientation) still identify correctly
-- **Frame-agnostic**: Every card is matched on both its art crop and its whole-card image, so showcase, borderless and extended-art printings identify without needing to guess where the art sits
-- **Cluttered-scene detection**: Combines Canny edge and Otsu threshold contour passes to find a card even when it rests on a bright surface (e.g. a sheet of paper)
-- **Frame type awareness**: Classifies card frames (modern 2003+, old border, borderless/full-art) to correctly isolate the art region
-- **Confidence scoring**: Shows match confidence percentage; requires ≥20% to accept a card (weaker guesses shown in red but not added); top-N candidates ranked
+- **Art-based recognition**: Identifies cards by matching artwork using
+  perceptual hashing (pHash + dHash), supporting non-English cards
+- **Orientation-robust**: Sideways cards are resolved geometrically from the
+  detected quad, and both 180° flips are hashed, so cards held
+  sideways/upside-down (or photos with unapplied EXIF orientation) still
+  identify correctly
+- **Frame-agnostic**: Every card is matched on both its art crop and its
+  whole-card image, so showcase, borderless and extended-art printings identify
+  without needing to guess where the art sits
+- **Cluttered-scene detection**: Combines Canny edge and Otsu threshold contour
+  passes to find a card even when it rests on a bright surface (e.g. a sheet of
+  paper)
+- **Frame type awareness**: Classifies card frames (modern 2003+, old border,
+  borderless/full-art) to correctly isolate the art region
+- **Confidence scoring**: Shows match confidence percentage; requires ≥20% to
+  accept a card (weaker guesses shown in red but not added); top-N candidates
+  ranked
 
 ### Collection Management
-- **Folder system**: Organize cards into flat folders (e.g., "Trade Binder", "EDH Deck", "Bulk Rares")
+
+- **Folder system**: Organize cards into flat folders (e.g., "Trade Binder",
+  "EDH Deck", "Bulk Rares")
 - **Default "Unsorted" folder**: Always exists, cannot be deleted
-- **Per-folder quantities**: Each card entry belongs to exactly one folder; moving transfers quantity
+- **Per-folder quantities**: Each card entry belongs to exactly one folder;
+  moving transfers quantity
 - **Card conditions**: Track NM, LP, MP, HP, DMG per entry
 
 ### Scanning Workflows
 
 #### Scan-to-Add
+
 1. Select a destination folder from the dropdown
 2. Point camera at cards — app auto-detects and matches
 3. Matched cards accumulate in a staging list
@@ -31,24 +51,33 @@ A fully offline-capable Progressive Web App for scanning and managing Magic: The
 5. Confirm to commit all staged cards into the selected folder
 
 #### Scan-to-Select
+
 1. Open a folder in the Collection view
 2. Tap "Scan Select" to activate camera
-3. Scan physical cards — the app matches against only the cards in *this folder* (by exact illustration)
+3. Scan physical cards — the app matches against only the cards in _this folder_
+   (by exact illustration)
 4. Matched cards are highlighted/selected in the folder's card list
-5. Close scanner, then use "Move to..." to transfer the selection to another folder
+5. Close scanner, then use "Move to..." to transfer the selection to another
+   folder
 
 #### Manual Selection + Move
+
 1. Open a folder, tap "Select" to enter selection mode
 2. Tap cards to select/deselect them
 3. Use "Move to..." to pick a destination folder
-4. Quantities transfer; if the same printing exists at the destination, quantities merge
+4. Quantities transfer; if the same printing exists at the destination,
+   quantities merge
 
 ### Offline Support
+
 - Full offline operation after initial database download
-- Service Worker caches: app shell, OpenCV WASM (~10.8MB), hash database, metadata
-- Caching strategies: cache-first for large assets, stale-while-revalidate for app code, network-first for HTML
+- Service Worker caches: app shell, OpenCV WASM (~10.8MB), hash database,
+  metadata
+- Caching strategies: cache-first for large assets, stale-while-revalidate for
+  app code, network-first for HTML
 
 ### Data Management
+
 - **Export**: JSON (preserves folder structure) or CSV
 - **Import**: JSON import restores full collection with folders
 - **IndexedDB**: All collection data stored locally in the browser
@@ -119,7 +148,7 @@ heuristics failed on real captures:
   axis, but cannot tell the top edge from the bottom, so both 180° flips are
   tried. The matcher is not rotation-invariant.
 - **Where is the art?** No fixed rectangle frames a showcase or borderless card,
-  so all three art layouts are cropped *and* the uncropped card is hashed. The
+  so all three art layouts are cropped _and_ the uncropped card is hashed. The
   uncropped card is matched against a separate set of full-card hashes; the art
   crops against the art hashes. See [Hash Database](#hash-database) below.
 
@@ -130,17 +159,17 @@ guesses are still shown (in red) but not added to the collection.
 
 ### Technology Stack
 
-| Layer | Technology | Purpose |
-|-------|-----------|---------|
-| Runtime | Deno | TypeScript execution, task runner, npm compatibility |
-| Bundler | Vite | Fast dev server, ES module bundling, worker support |
-| Language | Vanilla TypeScript | No framework, full control, minimal bundle size |
-| Image Processing | OpenCV.js (WASM) | Card detection, perspective correction, image manipulation |
-| Hashing | Custom pHash + dHash | Perceptual hashing for art-based card identification |
-| Storage | IndexedDB | Local collection persistence with folder/card schema |
-| Offline | Service Worker (vite-plugin-pwa) | Cache app shell, WASM, hash DB for full offline use |
-| Card Data | Scryfall API | Bulk data download + art crop images (one-time) |
-| Image Processing (build) | Sharp | Server-side image resizing for hash computation |
+| Layer                    | Technology                       | Purpose                                                    |
+| ------------------------ | -------------------------------- | ---------------------------------------------------------- |
+| Runtime                  | Deno                             | TypeScript execution, task runner, npm compatibility       |
+| Bundler                  | Vite                             | Fast dev server, ES module bundling, worker support        |
+| Language                 | Vanilla TypeScript               | No framework, full control, minimal bundle size            |
+| Image Processing         | OpenCV.js (WASM)                 | Card detection, perspective correction, image manipulation |
+| Hashing                  | Custom pHash + dHash             | Perceptual hashing for art-based card identification       |
+| Storage                  | IndexedDB                        | Local collection persistence with folder/card schema       |
+| Offline                  | Service Worker (vite-plugin-pwa) | Cache app shell, WASM, hash DB for full offline use        |
+| Card Data                | Scryfall API                     | Bulk data download + art crop images (one-time)            |
+| Image Processing (build) | Sharp                            | Server-side image resizing for hash computation            |
 
 ---
 
@@ -209,7 +238,8 @@ mtg_scanner_js/
 
 ### Hash Database Format
 
-Binary file with a fixed-size header and entry array for fast typed-array access:
+Binary file with a fixed-size header and entry array for fast typed-array
+access:
 
 ```
 Header (16 bytes):
@@ -250,6 +280,7 @@ skips such entries rather than scoring them.
 ### Perceptual Hash Algorithms
 
 **pHash (Perceptual Hash)**:
+
 1. Resize art to 32×32 grayscale
 2. Compute 2D DCT (Discrete Cosine Transform)
 3. Take top-left 8×8 DCT coefficients (low frequencies)
@@ -257,45 +288,55 @@ skips such entries rather than scoring them.
 5. Each bit = 1 if coefficient > median → 64-bit hash
 
 **dHash (Difference Hash)**:
+
 1. Resize art to 9×8 grayscale
 2. Compare adjacent horizontal pixels
 3. Each bit = 1 if left pixel > right pixel → 64-bit hash
 
-**Matching**: Combined score = `pHash_distance × 0.6 + dHash_distance × 0.4` (pHash weighted higher for frequency-domain robustness). Hamming distance computed via XOR + Kernighan's bit-counting.
+**Matching**: Combined score = `pHash_distance × 0.6 + dHash_distance × 0.4`
+(pHash weighted higher for frequency-domain robustness). Hamming distance
+computed via XOR + Kernighan's bit-counting.
 
 ### Art Region Layouts
 
 Three art rectangles are defined, as fractions of the warped 745×1040 card:
 
 - **Modern (2003+)**: Art at ~5.7% inset, ~11.5% from top to ~55% height.
-- **Old border (pre-2003)**: Thicker textured border; art inset slightly further.
+- **Old border (pre-2003)**: Thicker textured border; art inset slightly
+  further.
 - **Borderless/full-art**: Art extends nearly to the edges.
 
 The pipeline does **not** try to work out which one applies. It crops all three
 (plus the uncropped card) and lets the hash matcher pick the winner.
 
-An earlier version did classify the frame, by measuring border thickness
-inward from the left edge of the warped card. It was removed because it is not
+An earlier version did classify the frame, by measuring border thickness inward
+from the left edge of the warped card. It was removed because it is not
 measurable in practice: a card occupying a small part of the camera frame gets
 upscaled several times over by the warp, which smears the border into a gradient
 and contaminates the first column with background bleed. Measured border
 thickness collapsed towards zero, so normally-bordered cards were reported as
-borderless and cropped in the wrong place. Showcase layouts defeated it outright,
-since their art is not where any of these rectangles say it is.
+borderless and cropped in the wrong place. Showcase layouts defeated it
+outright, since their art is not where any of these rectangles say it is.
 
 ### IndexedDB Schema
 
 **Folders store** (keyPath: `id`):
+
 - `id`, `name`, `color`, `sortOrder`, `createdAt`, `isDefault`
 - Indexes: `sortOrder`, `name`
 
 **Cards store** (keyPath: `id`):
-- `id`, `folderId`, `scryfallId`, `illustrationId`, `oracleId`, `name`, `setCode`, `setName`, `collectorNumber`, `quantity`, `condition`, `notes`, `dateAdded`
-- Indexes: `folderId`, `scryfallId`, `illustrationId`, `oracleId`, `name`, compound `[folderId, scryfallId]`
+
+- `id`, `folderId`, `scryfallId`, `illustrationId`, `oracleId`, `name`,
+  `setCode`, `setName`, `collectorNumber`, `quantity`, `condition`, `notes`,
+  `dateAdded`
+- Indexes: `folderId`, `scryfallId`, `illustrationId`, `oracleId`, `name`,
+  compound `[folderId, scryfallId]`
 
 ### Web Worker Architecture
 
-OpenCV.js (~10.8 MB WASM) runs in an ES module Web Worker to keep the UI at 60fps:
+OpenCV.js (~10.8 MB WASM) runs in an ES module Web Worker to keep the UI at
+60fps:
 
 ```
 Main Thread                    Worker Thread
@@ -312,8 +353,8 @@ Main thread then:
 - Adds match to staging list (if confidence ≥ 20%)
 ```
 
-Per-frame "detect" calls return geometry only, so the overlay stays cheap;
-the full "identify" sweep runs once a card is detected and held steady.
+Per-frame "detect" calls return geometry only, so the overlay stays cheap; the
+full "identify" sweep runs once a card is detected and held steady.
 
 ### Service Worker Caching Strategy
 
@@ -323,20 +364,21 @@ transient dev modules would break HMR and OpenCV) and only applies real caching
 in production builds. To test offline/caching behaviour, use a production build:
 `deno task build && deno task preview`.
 
-| Asset Type | Strategy | Rationale |
-|-----------|----------|-----------|
-| HTML (navigate) | Network-first | Get latest app version |
-| JS/CSS/SVG | Stale-while-revalidate | Fast load, background update |
-| OpenCV WASM | Cache-first (lazy, at runtime) | Rarely changes, ~11 MB; excluded from install precache |
-| Hash DB + metadata | Cache-first (lazy, separate cache) | Large (~15 MB); excluded from install precache |
-| App shell (HTML/CSS/JS/manifest/icon) | Precached at install | Small, needed for offline start |
-| Other requests | Network-first with cache fallback | Graceful offline |
+| Asset Type                            | Strategy                           | Rationale                                              |
+| ------------------------------------- | ---------------------------------- | ------------------------------------------------------ |
+| HTML (navigate)                       | Network-first                      | Get latest app version                                 |
+| JS/CSS/SVG                            | Stale-while-revalidate             | Fast load, background update                           |
+| OpenCV WASM                           | Cache-first (lazy, at runtime)     | Rarely changes, ~11 MB; excluded from install precache |
+| Hash DB + metadata                    | Cache-first (lazy, separate cache) | Large (~15 MB); excluded from install precache         |
+| App shell (HTML/CSS/JS/manifest/icon) | Precached at install               | Small, needed for offline start                        |
+| Other requests                        | Network-first with cache fallback  | Graceful offline                                       |
 
 ---
 
 ## Usage
 
 ### Prerequisites
+
 - [Deno](https://deno.land/) v2.0+
 
 ### Development
@@ -346,7 +388,26 @@ in production builds. To test offline/caching behaviour, use a production build:
 deno task dev
 ```
 
-Opens at `http://localhost:3000`. Access from your phone on the same network using your machine's IP.
+Opens at `http://localhost:3000`. Access from your phone on the same network
+using your machine's IP.
+
+### Matcher Benchmark
+
+Run the matcher microbenchmark (legacy BigInt loop vs current popcount path):
+
+```sh
+deno task bench:matcher
+```
+
+Useful variants:
+
+```sh
+deno task bench:matcher --queries=16 --rounds=2 --space=both
+deno task bench:matcher --space=art
+deno task bench:matcher --space=full
+```
+
+See `docs/matcher_benchmark.md` for full usage and output interpretation.
 
 ### Building the Card Database
 
@@ -365,7 +426,8 @@ deno task db:art
 deno task db:build
 ```
 
-The output (`public/db/hash-db.bin` and `public/db/metadata.json`) is served as static assets to the PWA.
+The output (`public/db/hash-db.bin` and `public/db/metadata.json`) is served as
+static assets to the PWA.
 
 ### Production Build
 
@@ -374,30 +436,44 @@ deno task build    # Outputs to dist/
 deno task preview  # Preview the production build locally
 ```
 
-Deploy the `dist/` directory to any static hosting (Netlify, Vercel, Cloudflare Pages, etc.). Ensure the host serves with appropriate headers for WASM (COOP/COEP if SharedArrayBuffer is needed).
+Deploy the `dist/` directory to any static hosting (Netlify, Vercel, Cloudflare
+Pages, etc.). Ensure the host serves with appropriate headers for WASM
+(COOP/COEP if SharedArrayBuffer is needed).
 
 ---
 
 ## Design Decisions
 
 ### Why perceptual hashing over OCR?
+
 - Works for non-English cards (matches by art, not text)
 - Works for foils, worn cards, and cards at odd angles
 - No runtime API calls needed (fully offline)
 - Hash DB is compact (~1.6 MB for 50k cards)
 
 ### Why OpenCV.js in a Web Worker?
+
 - OpenCV WASM is 10.8 MB — loading blocks the main thread
 - Processing each frame (edge detection, perspective warp) takes 20-50ms
 - Worker keeps camera preview and UI responsive at 60fps
 
+### Hamming Distance Refactor
+
+- Matcher Hamming distance moved from BigInt/Kernighan loops to 32-bit popcount
+  over pre-split hash words
+- Scoring semantics are unchanged; only the hot-path implementation changed
+- This significantly reduces identify latency in the 8-candidate matching flow
+- See `docs/hamming_refactor.md` for details and benchmark context
+
 ### Why a binary hash DB format?
+
 - Fast to load (single fetch, parse into typed arrays)
 - Compact (32 bytes per entry vs. JSON overhead)
 - Direct BigUint64Array access for Hamming distance computation
 - Cacheable by Service Worker as a single binary blob
 
 ### Why Vanilla TypeScript (no framework)?
+
 - Minimal bundle size (26 KB app code gzipped)
 - No framework churn or dependency updates
 - Full control over DOM updates and lifecycle
@@ -407,7 +483,8 @@ Deploy the `dist/` directory to any static hosting (Netlify, Vercel, Cloudflare 
 
 ## Future Improvements
 
-- [ ] Statistics view (card counts per folder, set completion percentages, estimated value)
+- [ ] Statistics view (card counts per folder, set completion percentages,
+      estimated value)
 - [ ] PWA install prompt with guided UX
 - [ ] Lazy-load OpenCV (don't block initial render)
 - [ ] Chunk hash DB for incremental download

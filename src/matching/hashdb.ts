@@ -31,6 +31,14 @@ export class HashDB {
   private dHashes: BigUint64Array;
   private fullPHashes: BigUint64Array;
   private fullDHashes: BigUint64Array;
+  private pHashHighs: Uint32Array;
+  private pHashLows: Uint32Array;
+  private dHashHighs: Uint32Array;
+  private dHashLows: Uint32Array;
+  private fullPHashHighs: Uint32Array;
+  private fullPHashLows: Uint32Array;
+  private fullDHashHighs: Uint32Array;
+  private fullDHashLows: Uint32Array;
   private illustrationIds: string[];
   private _size: number;
   private _hasFullCardHashes: boolean;
@@ -40,6 +48,14 @@ export class HashDB {
     dHashes: BigUint64Array,
     fullPHashes: BigUint64Array,
     fullDHashes: BigUint64Array,
+    pHashHighs: Uint32Array,
+    pHashLows: Uint32Array,
+    dHashHighs: Uint32Array,
+    dHashLows: Uint32Array,
+    fullPHashHighs: Uint32Array,
+    fullPHashLows: Uint32Array,
+    fullDHashHighs: Uint32Array,
+    fullDHashLows: Uint32Array,
     illustrationIds: string[],
     hasFullCardHashes: boolean,
   ) {
@@ -47,6 +63,14 @@ export class HashDB {
     this.dHashes = dHashes;
     this.fullPHashes = fullPHashes;
     this.fullDHashes = fullDHashes;
+    this.pHashHighs = pHashHighs;
+    this.pHashLows = pHashLows;
+    this.dHashHighs = dHashHighs;
+    this.dHashLows = dHashLows;
+    this.fullPHashHighs = fullPHashHighs;
+    this.fullPHashLows = fullPHashLows;
+    this.fullDHashHighs = fullDHashHighs;
+    this.fullDHashLows = fullDHashLows;
     this.illustrationIds = illustrationIds;
     this._size = illustrationIds.length;
     this._hasFullCardHashes = hasFullCardHashes;
@@ -103,6 +127,14 @@ export class HashDB {
     const dHashes = new BigUint64Array(entryCount);
     const fullPHashes = new BigUint64Array(entryCount);
     const fullDHashes = new BigUint64Array(entryCount);
+    const pHashHighs = new Uint32Array(entryCount);
+    const pHashLows = new Uint32Array(entryCount);
+    const dHashHighs = new Uint32Array(entryCount);
+    const dHashLows = new Uint32Array(entryCount);
+    const fullPHashHighs = new Uint32Array(entryCount);
+    const fullPHashLows = new Uint32Array(entryCount);
+    const fullDHashHighs = new Uint32Array(entryCount);
+    const fullDHashLows = new Uint32Array(entryCount);
     const illustrationIds: string[] = [];
 
     for (let i = 0; i < entryCount; i++) {
@@ -114,14 +146,34 @@ export class HashDB {
       illustrationIds.push(id);
 
       // Art hash pair (8 bytes each, big-endian)
-      pHashes[i] = readBigUint64(view, offset + 16);
-      dHashes[i] = readBigUint64(view, offset + 24);
+      const pHigh = view.getUint32(offset + 16);
+      const pLow = view.getUint32(offset + 20);
+      const dHigh = view.getUint32(offset + 24);
+      const dLow = view.getUint32(offset + 28);
+
+      pHashHighs[i] = pHigh;
+      pHashLows[i] = pLow;
+      dHashHighs[i] = dHigh;
+      dHashLows[i] = dLow;
+
+      pHashes[i] = combineToBigUint64(pHigh, pLow);
+      dHashes[i] = combineToBigUint64(dHigh, dLow);
 
       // Full-card hash pair. Left at zero for v1 files, and also zero for v2
       // entries whose full card image was unavailable at build time.
       if (hasFullCardHashes) {
-        fullPHashes[i] = readBigUint64(view, offset + 32);
-        fullDHashes[i] = readBigUint64(view, offset + 40);
+        const fullPHigh = view.getUint32(offset + 32);
+        const fullPLow = view.getUint32(offset + 36);
+        const fullDHigh = view.getUint32(offset + 40);
+        const fullDLow = view.getUint32(offset + 44);
+
+        fullPHashHighs[i] = fullPHigh;
+        fullPHashLows[i] = fullPLow;
+        fullDHashHighs[i] = fullDHigh;
+        fullDHashLows[i] = fullDLow;
+
+        fullPHashes[i] = combineToBigUint64(fullPHigh, fullPLow);
+        fullDHashes[i] = combineToBigUint64(fullDHigh, fullDLow);
       }
     }
 
@@ -130,6 +182,14 @@ export class HashDB {
       dHashes,
       fullPHashes,
       fullDHashes,
+      pHashHighs,
+      pHashLows,
+      dHashHighs,
+      dHashLows,
+      fullPHashHighs,
+      fullPHashLows,
+      fullDHashHighs,
+      fullDHashLows,
       illustrationIds,
       hasFullCardHashes,
     );
@@ -178,6 +238,34 @@ export class HashDB {
   }
 
   /**
+   * Get art pHash upper 32-bit words for fast popcount matching.
+   */
+  getPHashHighs(): Uint32Array {
+    return this.pHashHighs;
+  }
+
+  /**
+   * Get art pHash lower 32-bit words for fast popcount matching.
+   */
+  getPHashLows(): Uint32Array {
+    return this.pHashLows;
+  }
+
+  /**
+   * Get art dHash upper 32-bit words for fast popcount matching.
+   */
+  getDHashHighs(): Uint32Array {
+    return this.dHashHighs;
+  }
+
+  /**
+   * Get art dHash lower 32-bit words for fast popcount matching.
+   */
+  getDHashLows(): Uint32Array {
+    return this.dHashLows;
+  }
+
+  /**
    * Get the full-card pHash array for bulk operations.
    * All zero when {@link hasFullCardHashes} is false.
    */
@@ -191,6 +279,34 @@ export class HashDB {
    */
   getFullDHashes(): BigUint64Array {
     return this.fullDHashes;
+  }
+
+  /**
+   * Get full-card pHash upper 32-bit words for fast popcount matching.
+   */
+  getFullPHashHighs(): Uint32Array {
+    return this.fullPHashHighs;
+  }
+
+  /**
+   * Get full-card pHash lower 32-bit words for fast popcount matching.
+   */
+  getFullPHashLows(): Uint32Array {
+    return this.fullPHashLows;
+  }
+
+  /**
+   * Get full-card dHash upper 32-bit words for fast popcount matching.
+   */
+  getFullDHashHighs(): Uint32Array {
+    return this.fullDHashHighs;
+  }
+
+  /**
+   * Get full-card dHash lower 32-bit words for fast popcount matching.
+   */
+  getFullDHashLows(): Uint32Array {
+    return this.fullDHashLows;
   }
 
   /**
@@ -222,8 +338,6 @@ function bytesToUUID(bytes: Uint8Array): string {
   }-${hex.slice(20, 32)}`;
 }
 
-function readBigUint64(view: DataView, offset: number): bigint {
-  const high = BigInt(view.getUint32(offset));
-  const low = BigInt(view.getUint32(offset + 4));
-  return (high << 32n) | low;
+function combineToBigUint64(high: number, low: number): bigint {
+  return (BigInt(high) << 32n) | BigInt(low);
 }

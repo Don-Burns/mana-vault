@@ -29,10 +29,31 @@ export type HashSpace = "art" | "full";
 function hashArrays(
   db: HashDB,
   space: HashSpace,
-): { pHashes: BigUint64Array; dHashes: BigUint64Array } {
+): {
+  pHashes: BigUint64Array;
+  dHashes: BigUint64Array;
+  pHashHighs: Uint32Array;
+  pHashLows: Uint32Array;
+  dHashHighs: Uint32Array;
+  dHashLows: Uint32Array;
+} {
   return space === "full"
-    ? { pHashes: db.getFullPHashes(), dHashes: db.getFullDHashes() }
-    : { pHashes: db.getPHashes(), dHashes: db.getDHashes() };
+    ? {
+      pHashes: db.getFullPHashes(),
+      dHashes: db.getFullDHashes(),
+      pHashHighs: db.getFullPHashHighs(),
+      pHashLows: db.getFullPHashLows(),
+      dHashHighs: db.getFullDHashHighs(),
+      dHashLows: db.getFullDHashLows(),
+    }
+    : {
+      pHashes: db.getPHashes(),
+      dHashes: db.getDHashes(),
+      pHashHighs: db.getPHashHighs(),
+      pHashLows: db.getPHashLows(),
+      dHashHighs: db.getDHashHighs(),
+      dHashLows: db.getDHashLows(),
+    };
 }
 
 export interface MatchResult {
@@ -63,8 +84,13 @@ export function findMatches(
 ): MatchResult[] {
   if (space === "full" && !db.hasFullCardHashes) return [];
 
-  const { pHashes, dHashes } = hashArrays(db, space);
+  const { pHashes, dHashes, pHashHighs, pHashLows, dHashHighs, dHashLows } =
+    hashArrays(db, space);
   const size = db.size;
+  const queryPHigh = Number(queryPHash >> 32n) >>> 0;
+  const queryPLow = Number(queryPHash & 0xFFFF_FFFFn) >>> 0;
+  const queryDHigh = Number(queryDHash >> 32n) >>> 0;
+  const queryDLow = Number(queryDHash & 0xFFFF_FFFFn) >>> 0;
 
   // Brute-force search over all entries
   // For ~50k entries with 64-bit hashes, this takes < 5ms
@@ -75,8 +101,10 @@ export function findMatches(
     // build time. Comparing against it would score any near-zero query highly.
     if (pHashes[i] === 0n && dHashes[i] === 0n) continue;
 
-    const pDist = hammingDistance64(queryPHash, pHashes[i]);
-    const dDist = hammingDistance64(queryDHash, dHashes[i]);
+    const pDist = popcount32(queryPHigh ^ pHashHighs[i]) +
+      popcount32(queryPLow ^ pHashLows[i]);
+    const dDist = popcount32(queryDHigh ^ dHashHighs[i]) +
+      popcount32(queryDLow ^ dHashLows[i]);
 
     // Combined score: weighted average of both distances
     // pHash is generally more reliable, so weight it higher
@@ -123,8 +151,13 @@ export function findMatchesInSubset(
 ): MatchResult[] {
   if (space === "full" && !db.hasFullCardHashes) return [];
 
-  const { pHashes, dHashes } = hashArrays(db, space);
+  const { pHashes, dHashes, pHashHighs, pHashLows, dHashHighs, dHashLows } =
+    hashArrays(db, space);
   const size = db.size;
+  const queryPHigh = Number(queryPHash >> 32n) >>> 0;
+  const queryPLow = Number(queryPHash & 0xFFFF_FFFFn) >>> 0;
+  const queryDHigh = Number(queryDHash >> 32n) >>> 0;
+  const queryDLow = Number(queryDHash & 0xFFFF_FFFFn) >>> 0;
   const results: MatchResult[] = [];
 
   for (let i = 0; i < size; i++) {
@@ -132,8 +165,10 @@ export function findMatchesInSubset(
     if (!illustrationIds.has(id)) continue;
     if (pHashes[i] === 0n && dHashes[i] === 0n) continue;
 
-    const pDist = hammingDistance64(queryPHash, pHashes[i]);
-    const dDist = hammingDistance64(queryDHash, dHashes[i]);
+    const pDist = popcount32(queryPHigh ^ pHashHighs[i]) +
+      popcount32(queryPLow ^ pHashLows[i]);
+    const dDist = popcount32(queryDHigh ^ dHashHighs[i]) +
+      popcount32(queryDLow ^ dHashLows[i]);
     const combined = pDist * 0.6 + dDist * 0.4;
 
     results.push({
@@ -151,20 +186,18 @@ export function findMatchesInSubset(
 }
 
 /**
- * Compute Hamming distance between two 64-bit values.
- * Returns the number of differing bits (0-64).
+ * Count set bits in a 32-bit integer.
+ *
+ * Uses a classic SWAR popcount (Hacker's Delight) with only integer ops,
+ * which is markedly faster than BigInt bit-twiddling in tight loops.
  */
-function hammingDistance64(a: bigint, b: bigint): number {
-  let xor = a ^ b;
-  let count = 0;
-
-  // Brian Kernighan's algorithm
-  while (xor !== 0n) {
-    xor &= xor - 1n;
-    count++;
-  }
-
-  return count;
+function popcount32(x: number): number {
+  x = x - ((x >>> 1) & 0x5555_5555);
+  x = (x & 0x3333_3333) + ((x >>> 2) & 0x3333_3333);
+  x = (x + (x >>> 4)) & 0x0F0F_0F0F;
+  x = x + (x >>> 8);
+  x = x + (x >>> 16);
+  return x & 0x3F;
 }
 
 /**
