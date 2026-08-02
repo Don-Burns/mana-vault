@@ -8,7 +8,7 @@
  *   - "detect": where is the card in this frame? Geometry only, cheap enough to
  *     run on every sampled frame to drive the viewfinder overlay.
  *   - "identify": which card is this? Runs the full `identifyCardInMat`
- *     pipeline (detect → warp → hash both portrait orientations → match). The main
+ *     pipeline (detect → warp → 8 candidate views → hash → match). The main
  *     thread only asks this once a card has been detected and held steady.
  *
  * Keeping the database here means the main thread never needs OpenCV, and the
@@ -113,7 +113,6 @@ function detectCard(
     const result = detectCardInMat(cv, src);
 
     if (result.cardMat) result.cardMat.delete();
-    if (result.artMat) result.artMat.delete();
 
     return {
       type: "detect-result",
@@ -128,7 +127,7 @@ function detectCard(
 }
 
 /**
- * Full identification: detect, warp, hash both orientations and match
+ * Full identification: detect, warp, hash every candidate view and match
  * against the database.
  */
 function identifyCard(

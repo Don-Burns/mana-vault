@@ -2,17 +2,20 @@
  * Card Identification Orchestration
  *
  * Ties the geometric detection pipeline together with perceptual-hash matching
- * and — crucially — resolves card orientation.
+ * and — crucially — resolves the two things the detector cannot determine on
+ * its own: which way up the card is, and where its art sits.
  *
- * `detectCardInMat` locates a card-shaped quad and warps it upright, but has no
- * way to tell which side is the top. The card may have been photographed
- * rotated, or the source image may carry an unapplied EXIF orientation. The
- * warp resolves in-plane orientation geometrically, so the card is always
- * portrait; rather than guessing which end is up, we hash the art crop for both
- * 180° flips and keep whichever best matches the database.
+ * `detectCardInMat` locates a card-shaped quad and warps it to an upright
+ * portrait rectangle, but cannot tell the top edge from the bottom — the card
+ * may have been photographed rotated, or the source image may carry an
+ * unapplied EXIF orientation. Nor can any fixed rectangle frame the art of a
+ * showcase or borderless card. Both questions are answered by search rather
+ * than by heuristic: `extractCardCandidates` emits 8 views of the card (2
+ * orientations x {uncropped card, 3 art-region layouts}), each is hashed
+ * against its corresponding hash space, and the best database score wins.
  *
  * This module deliberately keeps the OpenCV-dependent work (`identifyCardInMat`)
- * separate from the pure hash-matching work (`matchArtOrientations`), but in the
+ * separate from the pure hash-matching work (`matchCardCandidates`), but in the
  * browser both run together inside the detection Web Worker: the worker owns
  * OpenCV *and* the hash database, so `identifyCardInMat` is the single entry
  * point for turning a camera frame into a card match. The main thread only ever
@@ -22,14 +25,17 @@
  */
 
 import {
+  type CandidateSource,
+  type CardCandidate,
   detectCardInMat,
-  extractArtRegionsAllOrientations,
+  extractCardCandidates,
   matToImageData,
 } from "./pipeline.ts";
 import { computeHashesFromImageData } from "../matching/hasher.ts";
 import {
   findMatches,
   findMatchesInSubset,
+  type HashSpace,
   type MatchResult,
 } from "../matching/matcher.ts";
 import type { HashDB } from "../matching/hashdb.ts";
@@ -58,54 +64,74 @@ export interface IdentifyResult {
   cardImage?: ImageData;
 }
 
+/** The winning candidate of a card-candidate search. */
+export interface CandidateMatch {
+  match: MatchResult;
+  orientation: Orientation;
+  /** Which view of the card produced this match (debug/diagnostics). */
+  source: CandidateSource;
+}
+
 /**
- * Given the orientation art crops of a detected card, find the best database
- * match across all of them.
+ * Search every candidate view of a detected card and return the single best
+ * database match across all of them.
+ *
+ * Each candidate is hashed and compared against the hash space it belongs to:
+ * the uncropped card against the full-card hashes, art crops against the art
+ * hashes. Scores from the two spaces are directly comparable — both are
+ * Hamming distances over 64-bit hashes of a 32x32 grayscale image — so the
+ * global minimum wins regardless of which space it came from.
  *
  * Pure (no OpenCV): safe to run on the main thread with the loaded hash DB.
  */
-export function matchArtOrientations(
+export function matchCardCandidates(
   db: HashDB,
-  artRegions: ImageData[],
-): { match: MatchResult; orientation: Orientation } | null {
-  let best: { match: MatchResult; orientation: Orientation } | null = null;
-
-  for (let i = 0; i < artRegions.length; i++) {
-    const { pHash, dHash } = computeHashesFromImageData(artRegions[i]);
-    const matches = findMatches(db, pHash, dHash, 1);
-    if (matches.length === 0) continue;
-
-    // get the best match across all orientations
-    for (const match of matches) {
-      if (!best || match.combinedScore < best.match.combinedScore) {
-        best = { match, orientation: i as Orientation };
-      }
-    }
-  }
-
-  return best;
+  candidates: CardCandidate[],
+): CandidateMatch | null {
+  return searchCandidates(
+    candidates,
+    (pHash, dHash, space) => findMatches(db, pHash, dHash, 1, space),
+  );
 }
 
 /**
- * Like {@link matchArtOrientations}, but restricts the search to a subset of
+ * Like {@link matchCardCandidates}, but restricts the search to a subset of
  * illustration IDs (e.g. the cards in a specific folder for scan-to-select).
  */
-export function matchArtOrientationsInSubset(
+export function matchCardCandidatesInSubset(
   db: HashDB,
-  artRegions: ImageData[],
+  candidates: CardCandidate[],
   illustrationIds: Set<string>,
-): { match: MatchResult; orientation: Orientation } | null {
-  let best: { match: MatchResult; orientation: Orientation } | null = null;
+): CandidateMatch | null {
+  return searchCandidates(
+    candidates,
+    (pHash, dHash, space) =>
+      findMatchesInSubset(db, pHash, dHash, illustrationIds, 1, space),
+  );
+}
 
-  for (let i = 0; i < artRegions.length; i++) {
-    const { pHash, dHash } = computeHashesFromImageData(artRegions[i]);
-    const matches = findMatchesInSubset(db, pHash, dHash, illustrationIds, 1);
-    if (matches.length === 0) continue;
+/** Shared candidate sweep; `search` supplies the database lookup. */
+function searchCandidates(
+  candidates: CardCandidate[],
+  search: (
+    pHash: bigint,
+    dHash: bigint,
+    space: HashSpace,
+  ) => MatchResult[],
+): CandidateMatch | null {
+  let best: CandidateMatch | null = null;
 
-    // get the best match across all orientations
-    for (const match of matches) {
+  for (const candidate of candidates) {
+    const space: HashSpace = candidate.source === "full" ? "full" : "art";
+    const { pHash, dHash } = computeHashesFromImageData(candidate.imageData);
+
+    for (const match of search(pHash, dHash, space)) {
       if (!best || match.combinedScore < best.match.combinedScore) {
-        best = { match, orientation: i as Orientation };
+        best = {
+          match,
+          orientation: candidate.orientation,
+          source: candidate.source,
+        };
       }
     }
   }
@@ -114,8 +140,8 @@ export function matchArtOrientationsInSubset(
 }
 
 /**
- * Full identification from a source image Mat: detect the card, try both
- * upright orientations, and return the best database match.
+ * Full identification from a source image Mat: detect the card, hash every
+ * candidate view of it, and return the best database match.
  *
  * When `illustrationIds` is supplied the search is restricted to those
  * illustrations (scan-to-select within a folder); otherwise the whole database
@@ -140,10 +166,10 @@ export function identifyCardInMat(
   }
 
   try {
-    const artRegions = extractArtRegionsAllOrientations(cv, detection.cardMat);
+    const candidates = extractCardCandidates(cv, detection.cardMat);
     const best = illustrationIds
-      ? matchArtOrientationsInSubset(db, artRegions, illustrationIds)
-      : matchArtOrientations(db, artRegions);
+      ? matchCardCandidatesInSubset(db, candidates, illustrationIds)
+      : matchCardCandidates(db, candidates);
 
     if (!best) {
       return {
@@ -167,7 +193,6 @@ export function identifyCardInMat(
     };
   } finally {
     detection.cardMat.delete();
-    if (detection.artMat) detection.artMat.delete();
   }
 }
 

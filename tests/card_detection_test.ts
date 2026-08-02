@@ -8,9 +8,9 @@
  *  1. Full-pipeline identification (the primary tests): a raw image file is
  *     decoded to pixels and handed to `identifyCardInMat`, which runs the
  *     ENTIRE image-processing chain — contour detection, perspective warp,
- *     orientation resolution (geometric, plus both 180° flips), art extraction,
- *     hashing
- *     and database matching — and returns the best match. No rotation or other
+ *     orientation resolution (geometric, plus both 180° flips), candidate
+ *     extraction (uncropped card + three art-region layouts), hashing and
+ *     database matching — and returns the best match. No rotation or other
  *     image manipulation happens in the test itself; everything under test is
  *     production code exactly as the app runs it.
  *
@@ -21,16 +21,20 @@
  *   card_on_white.jpg     — "Temple of Mystery"        (EXIF-rotated 90°)
  *   webcam_pic_noisy.jpg  — "Kaito's Pursuit"          (card physically 180°)
  *   webcam_pic_noisy_2.jpg— "Heir of the Ancient Fang" (card physically 180°)
+ *   webcam_pic_noisy_3.jpg— "Primeval Titan"           (borderless showcase)
+ *   webcam_pic_noisy_4.jpg— "Mister Negative"
+ *   webcam_pic_noisy_5.jpg— "Hydro-Man, Fluid Felon"
  *
- * Each fixture is in a DIFFERENT orientation, which is precisely why the full
+ * The fixtures are in DIFFERENT orientations, which is precisely why the full
  * pipeline must resolve orientation itself rather than relying on the test to
- * pre-rotate the image.
+ * pre-rotate the image. They also cover both hash spaces: the first three are
+ * won by an art crop, the last three by the uncropped full-card hash.
  *
  * jpeg-js is used only to decode the JPEG to raw RGBA pixels (the vendored
  * OpenCV.js build has no imgcodecs / imdecode).
  */
 
-import { assert, assertEquals, assertGreater } from "@std/assert";
+import { assert, assertEquals, assertGreater, assertThrows } from "@std/assert";
 import { HashDB } from "../src/matching/hashdb.ts";
 import {
   detectCardInMat,
@@ -76,10 +80,33 @@ const HEIR: Fixture = {
   illustrationId: "d64c8150-e2f3-4891-9272-f031c5a9dded",
 };
 
+// Borderless showcase printing, whose in-frame art sits where none of the
+// ART_REGIONS rectangles look. Only the uncropped full-card hash identifies it.
+const PRIMEVAL_TITAN: Fixture = {
+  file: "webcam_pic_noisy_3.jpg",
+  name: "Primeval Titan",
+  illustrationId: "8c621873-0029-4f00-943a-7923a5fbaa16",
+};
+
+const MR_NEGATIVE: Fixture = {
+  file: "webcam_pic_noisy_4.jpg",
+  name: "Mister Negative",
+  illustrationId: "6c965ec9-f636-4148-9a0d-563f459f3478",
+};
+
+const HYDROMAN: Fixture = {
+  file: "webcam_pic_noisy_5.jpg",
+  name: "Hydro-Man, Fluid Felon",
+  illustrationId: "42defbd3-7471-494b-a1ee-92e5784d0e3c",
+};
+
 const FIXTURES: Fixture[] = [
   TEMPLE,
   KAITO,
   HEIR,
+  PRIMEVAL_TITAN,
+  MR_NEGATIVE,
+  HYDROMAN,
 ];
 
 // --- Helpers ---
@@ -319,6 +346,47 @@ Deno.test("HashDB loads and parses the binary database", async () => {
   assertEquals(entry.illustrationId, TEMPLE.illustrationId);
   assert(entry.pHash !== 0n, "pHash should be non-zero");
   assert(entry.dHash !== 0n, "dHash should be non-zero");
+});
+
+Deno.test("HashDB exposes both art and full-card hash spaces", async () => {
+  const db = await loadDB();
+
+  assert(
+    db.hasFullCardHashes,
+    "Checked-in DB should be format v2 (rebuild with `deno task db:build`)",
+  );
+
+  const idx = db.findByIllustrationId(TEMPLE.illustrationId);
+  const entry = db.getEntry(idx);
+
+  assert(entry.fullPHash !== 0n, "full-card pHash should be non-zero");
+  assert(entry.fullDHash !== 0n, "full-card dHash should be non-zero");
+
+  // The two spaces describe different images, so they must not coincide.
+  assert(
+    entry.pHash !== entry.fullPHash,
+    "art and full-card pHash should differ",
+  );
+
+  // Bulk accessors must be parallel to the entry accessors.
+  assertEquals(db.getFullPHashes().length, db.size);
+  assertEquals(db.getFullDHashes().length, db.size);
+  assertEquals(db.getFullPHashes()[idx], entry.fullPHash);
+});
+
+Deno.test("HashDB rejects an unsupported format version", () => {
+  const buf = new ArrayBuffer(16);
+  const view = new DataView(buf);
+  new Uint8Array(buf).set(new TextEncoder().encode("MTGH"), 0);
+  view.setUint16(4, 99);
+  view.setUint32(6, 0);
+  view.setUint16(10, 8);
+
+  assertThrows(
+    () => HashDB.fromBuffer(buf),
+    Error,
+    "Unsupported hash DB version",
+  );
 });
 
 Deno.test("metadata contains Temple of Mystery", async () => {

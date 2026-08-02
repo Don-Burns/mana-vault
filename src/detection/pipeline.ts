@@ -9,7 +9,7 @@
  * strategy.
  */
 
-import { ART_REGIONS, classifyFrameType } from "./frame-classifier.ts";
+import { ART_REGIONS, type FrameType } from "./frame-classifier.ts";
 import type { Cv, Mat, MatVector } from "../../vendor/opencv/mod.ts";
 
 // --- Types ---
@@ -26,8 +26,6 @@ export interface PipelineResult {
   candidates?: [number, number][][];
   /** Perspective-corrected card (745×1040). Caller must call .delete(). */
   cardMat?: Mat;
-  /** Extracted art region. Caller must call .delete(). */
-  artMat?: Mat;
 }
 
 /** Standard card output dimensions (proportional to 63 mm × 88 mm). */
@@ -42,8 +40,9 @@ const CARD_HEIGHT = 1040;
  * Run the full card detection pipeline on a source image Mat.
  *
  * Accepts RGBA (from ImageData) or BGR (3-channel) input.
- * Returns perspective-corrected card and extracted art region as Mats.
- * Caller is responsible for deleting returned cardMat and artMat.
+ * Returns the perspective-corrected card; caller is responsible for deleting it.
+ * Art regions are not cropped here — identification needs several different
+ * crops, which `extractCardCandidates` produces on demand.
  */
 export function detectCardInMat(cv: Cv, src: Mat): PipelineResult {
   const gray = new cv.Mat();
@@ -135,15 +134,11 @@ export function detectCardInMat(cv: Cv, src: Mat): PipelineResult {
     // Perspective correction
     const cardMat = perspectiveWarp(cv, src, corners);
 
-    // Extract art region
-    const artMat = extractArtRegion(cv, cardMat);
-
     return {
       found: true,
       corners,
       candidates,
       cardMat,
-      artMat: artMat ?? undefined,
     };
   } finally {
     gray.delete();
@@ -522,15 +517,22 @@ export function perspectiveWarp(
 // ---------------------------------------------------------------------------
 
 /**
- * Extract the art region from a perspective-corrected card Mat.
- * Uses frame classification to determine crop bounds.
+ * Extract the art region for a given frame layout from a perspective-corrected
+ * card Mat.
+ *
+ * The frame type is supplied by the caller rather than inferred. Measuring it
+ * from the image proved unreliable — a card that fills only a small part of the
+ * frame is upscaled several times over by the warp, which smears the border
+ * into a gradient and makes any border-thickness heuristic read near zero. The
+ * pipeline now crops every layout and lets the hash matcher decide.
  */
-export function extractArtRegion(cv: Cv, cardMat: Mat): Mat | null {
+export function extractArtRegion(
+  cv: Cv,
+  cardMat: Mat,
+  frameType: FrameType,
+): Mat | null {
   const width = cardMat.cols;
   const height = cardMat.rows;
-
-  const cardImageData = matToImageData(cv, cardMat);
-  const frameType = classifyFrameType(cardImageData);
 
   const [leftPct, topPct, rightPct, bottomPct] = ART_REGIONS[frameType];
 
@@ -557,28 +559,61 @@ export function extractArtRegion(cv: Cv, cardMat: Mat): Mat | null {
 }
 
 /**
- * Extract the art region for both upright orientations of a card.
+ * Which image a hash candidate was cropped from.
  *
- * `perspectiveWarp` resolves in-plane orientation geometrically (via
- * `orientQuadPortrait`), so the warped card is always portrait and the only
- * remaining ambiguity is whether it is the right way up or upside down — the
- * card may have been photographed rotated, or the source image may carry an
- * unapplied EXIF orientation. Rather than guessing, we return the art crop for
- * both and let the caller hash each and pick whichever best matches the
- * database.
- *
- * Returns art-region ImageDatas indexed by 180° half-turns applied to the card:
- * [0°, 180°]. The caller owns nothing to delete (all intermediate Mats are
- * freed here).
+ * `"full"` is the whole perspective-corrected card with no crop at all; the
+ * others are the {@link ART_REGIONS} rectangles for each frame layout.
  */
-export function extractArtRegionsAllOrientations(
+export type CandidateSource = "full" | FrameType;
+
+/** One hashable view of a detected card. */
+export interface CardCandidate {
+  imageData: ImageData;
+  /** 180° half-turns applied to the warped card: 0 = as warped, 1 = flipped. */
+  orientation: 0 | 1;
+  source: CandidateSource;
+}
+
+/** Sources emitted per orientation, in the order they are produced. */
+const CANDIDATE_SOURCES: CandidateSource[] = [
+  "full",
+  "modern",
+  "old",
+  "borderless",
+];
+
+/**
+ * Build every hashable view of a detected card: 2 orientations x 4 sources.
+ *
+ * Two problems are resolved here by search rather than by guessing, because
+ * both heuristics proved unreliable on real captures:
+ *
+ *  1. Which way up is the card? `perspectiveWarp` resolves the sideways case
+ *     geometrically (see `orientQuadPortrait`), so the warp is always portrait,
+ *     but it cannot tell the top edge from the bottom — the card may have been
+ *     photographed rotated, or the source image may carry an unapplied EXIF
+ *     orientation. Both 180° flips are therefore emitted.
+ *
+ *  2. Where is the art? A fixed percentage rectangle only works for a known
+ *     frame layout, and no rectangle frames showcase / borderless / extended-art
+ *     cards reliably. So all three {@link ART_REGIONS} are emitted, alongside the
+ *     uncropped card, which needs no art region at all and is what actually
+ *     identifies those irregular layouts.
+ *
+ * The caller hashes each candidate against the matching hash space (`"full"`
+ * against the full-card hashes, the rest against the art hashes) and keeps the
+ * best score. All intermediate Mats are freed here; the caller owns nothing.
+ */
+export function extractCardCandidates(
   cv: Cv,
   cardMat: Mat,
-): ImageData[] {
-  const results: ImageData[] = [];
+): CardCandidate[] {
+  const results: CardCandidate[] = [];
   const rotateCodes = [null, cv.ROTATE_180];
 
-  for (const code of rotateCodes) {
+  for (let orientation = 0; orientation < rotateCodes.length; orientation++) {
+    const code = rotateCodes[orientation];
+
     let rotated: Mat;
     if (code === null) {
       rotated = cardMat;
@@ -587,12 +622,30 @@ export function extractArtRegionsAllOrientations(
       cv.rotate(cardMat, rotated, code);
     }
 
-    const art = extractArtRegion(cv, rotated);
-    if (art) {
-      results.push(matToImageData(cv, art));
-      art.delete();
+    try {
+      for (const source of CANDIDATE_SOURCES) {
+        if (source === "full") {
+          results.push({
+            imageData: matToImageData(cv, rotated),
+            orientation: orientation as 0 | 1,
+            source,
+          });
+          continue;
+        }
+
+        const art = extractArtRegion(cv, rotated, source);
+        if (!art) continue;
+
+        results.push({
+          imageData: matToImageData(cv, art),
+          orientation: orientation as 0 | 1,
+          source,
+        });
+        art.delete();
+      }
+    } finally {
+      if (rotated !== cardMat) rotated.delete();
     }
-    if (rotated !== cardMat) rotated.delete();
   }
 
   return results;

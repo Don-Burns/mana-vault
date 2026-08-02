@@ -10,6 +10,7 @@ A fully offline-capable Progressive Web App for scanning and managing Magic: The
 - **Manual capture**: Tap-to-capture fallback for difficult conditions
 - **Art-based recognition**: Identifies cards by matching artwork using perceptual hashing (pHash + dHash), supporting non-English cards
 - **Orientation-robust**: Sideways cards are resolved geometrically from the detected quad, and both 180° flips are hashed, so cards held sideways/upside-down (or photos with unapplied EXIF orientation) still identify correctly
+- **Frame-agnostic**: Every card is matched on both its art crop and its whole-card image, so showcase, borderless and extended-art printings identify without needing to guess where the art sits
 - **Cluttered-scene detection**: Combines Canny edge and Otsu threshold contour passes to find a card even when it rests on a bright surface (e.g. a sheet of paper)
 - **Frame type awareness**: Classifies card frames (modern 2003+, old border, borderless/full-art) to correctly isolate the art region
 - **Confidence scoring**: Shows match confidence percentage; requires ≥20% to accept a card (weaker guesses shown in red but not added); top-N candidates ranked
@@ -104,14 +105,23 @@ inside a brighter backing, e.g. a card on paper; else the largest)
 4-Point Perspective Warp → Flat 745×1040 card image
     │
     ▼
-For each of 2 rotations (0°/180°):
-    Frame Type Classification → Art Region Extraction → ImageData
+Build 8 candidate views: 2 rotations (0°/180°) × 4 sources
+    (uncropped card, modern / old / borderless art regions)
     │
     ▼
-Main thread hashes both crops → Hamming search → best match wins
-(the warp already resolves sideways cards from the quad's long axis; only the
- 180° flip is ambiguous, and the matcher is not rotation-invariant)
+Hash each candidate → Hamming search → best score across all 8 wins
 ```
+
+Two unknowns are resolved by search rather than by heuristic, because both
+heuristics failed on real captures:
+
+- **Which way up?** The warp already fixes sideways cards from the quad's long
+  axis, but cannot tell the top edge from the bottom, so both 180° flips are
+  tried. The matcher is not rotation-invariant.
+- **Where is the art?** No fixed rectangle frames a showcase or borderless card,
+  so all three art layouts are cropped *and* the uncropped card is hashed. The
+  uncropped card is matched against a separate set of full-card hashes; the art
+  crops against the art hashes. See [Hash Database](#hash-database) below.
 
 The scanner overlay draws the selected card in **green** and other detected
 candidates in **yellow**, so you can see what the detector considers card-like.
@@ -204,18 +214,38 @@ Binary file with a fixed-size header and entry array for fast typed-array access
 ```
 Header (16 bytes):
   [0..3]   Magic: "MTGH" (4 bytes ASCII)
-  [4..5]   Version: 1 (uint16 BE)
+  [4..5]   Version: 2 (uint16 BE)
   [6..9]   Entry count (uint32 BE)
   [10..11]  Hash size: 8 bytes (uint16 BE)
   [12..15]  Reserved (zeros)
 
-Entries (32 bytes each):
+Entries (48 bytes each):
   [0..15]   illustration_id (UUID as 16 raw bytes, no dashes)
-  [16..23]  pHash (64-bit, big-endian)
-  [24..31]  dHash (64-bit, big-endian)
+  [16..23]  art pHash       (64-bit, big-endian)
+  [24..31]  art dHash       (64-bit, big-endian)
+  [32..39]  full-card pHash (64-bit, big-endian)
+  [40..47]  full-card dHash (64-bit, big-endian)
 ```
 
-**Size estimate**: ~50k unique illustrations × 32 bytes = ~1.6 MB
+**Size estimate**: ~50k unique illustrations × 48 bytes = ~2.5 MB
+
+Version 1 files (32-byte entries, art hashes only) still load; the loader
+reports `hasFullCardHashes === false` and the matcher searches art only.
+
+#### Why two hash pairs?
+
+They fail in different ways, so the matcher searches both and takes the best:
+
+- **Art hashes** (from Scryfall's `art_crop`) are invariant to frame treatment,
+  set symbol and language. They are the only thing that matches a printing whose
+  frame differs from the one captured in the bulk data — reprints, alternate
+  treatments, non-English cards.
+- **Full-card hashes** (from the whole card image) need no art-region crop at
+  all. They are what identify showcase, borderless and extended-art layouts,
+  where no fixed percentage rectangle frames the art reliably.
+
+An all-zero pair means that image was unavailable at build time; the matcher
+skips such entries rather than scoring them.
 
 ### Perceptual Hash Algorithms
 
@@ -233,14 +263,25 @@ Entries (32 bytes each):
 
 **Matching**: Combined score = `pHash_distance × 0.6 + dHash_distance × 0.4` (pHash weighted higher for frequency-domain robustness). Hamming distance computed via XOR + Kernighan's bit-counting.
 
-### Frame Type Classification
+### Art Region Layouts
 
-Cards are classified by analyzing the border region:
-- **Modern (2003+)**: Thin black/colored border. Art at ~5.7% inset, ~11.5% from top to ~55% height.
-- **Old border (pre-2003)**: Thicker textured border (>7% card width). Art slightly inset further.
-- **Borderless/full-art**: High color variance at edges (image content at border). Art extends nearly to edges.
+Three art rectangles are defined, as fractions of the warped 745×1040 card:
 
-Classification uses: edge pixel color variance, border thickness measurement, and average edge brightness.
+- **Modern (2003+)**: Art at ~5.7% inset, ~11.5% from top to ~55% height.
+- **Old border (pre-2003)**: Thicker textured border; art inset slightly further.
+- **Borderless/full-art**: Art extends nearly to the edges.
+
+The pipeline does **not** try to work out which one applies. It crops all three
+(plus the uncropped card) and lets the hash matcher pick the winner.
+
+An earlier version did classify the frame, by measuring border thickness
+inward from the left edge of the warped card. It was removed because it is not
+measurable in practice: a card occupying a small part of the camera frame gets
+upscaled several times over by the warp, which smears the border into a gradient
+and contaminates the first column with background bleed. Measured border
+thickness collapsed towards zero, so normally-bordered cards were reported as
+borderless and cropped in the wrong place. Showcase layouts defeated it outright,
+since their art is not where any of these rectangles say it is.
 
 ### IndexedDB Schema
 
@@ -259,18 +300,20 @@ OpenCV.js (~10.8 MB WASM) runs in an ES module Web Worker to keep the UI at 60fp
 ```
 Main Thread                    Worker Thread
 ───────────                    ─────────────
-Camera frame (ImageData)  ──→  OpenCV processing:
+Camera frame (ImageData)  ──→  Worker owns OpenCV *and* the hash DB:
                                - Two-source contour detection
                                - Perspective warp
-                               - Art extraction ×2 orientations
-                          ←──  Result: {corners, candidates, cardImage, artRegions[2]}
+                               - 8 candidate views (2 orientations × 4 sources)
+                               - Hashes each, searches the matching hash space
+                          ←──  Result: {corners, candidates, cardImage, match}
 
 Main thread then:
 - Draws overlay (selected quad green, other candidates yellow)
-- Hashes both orientation crops, keeps the best DB match
-- Searches hash DB (brute-force, <5ms for 50k entries)
 - Adds match to staging list (if confidence ≥ 20%)
 ```
+
+Per-frame "detect" calls return geometry only, so the overlay stays cheap;
+the full "identify" sweep runs once a card is detected and held steady.
 
 ### Service Worker Caching Strategy
 

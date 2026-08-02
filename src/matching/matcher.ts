@@ -3,9 +3,37 @@
  *
  * Finds the closest matching card(s) in the hash database given
  * a query pHash and dHash. Uses Hamming distance for comparison.
+ *
+ * The database holds two hash pairs per illustration — one derived from the art
+ * crop and one from the whole card image — and every search targets exactly one
+ * of them via the `space` argument. They are not interchangeable: a query hashed
+ * from an art crop must be compared against art hashes, and a query hashed from
+ * an uncropped card against full-card hashes.
  */
 
 import { HashDB } from "./hashdb.ts";
+
+/**
+ * Which hash space to search.
+ *
+ * - `"art"`: hashes of the art crop. Invariant to frame treatment, set symbol
+ *   and language, so these match reprints whose frame differs from the one in
+ *   the database.
+ * - `"full"`: hashes of the whole card. Needs no art-region crop, so these are
+ *   what identify showcase / borderless / extended-art layouts, where no fixed
+ *   rectangle frames the art reliably.
+ */
+export type HashSpace = "art" | "full";
+
+/** Resolve the (pHash, dHash) arrays backing a hash space. */
+function hashArrays(
+  db: HashDB,
+  space: HashSpace,
+): { pHashes: BigUint64Array; dHashes: BigUint64Array } {
+  return space === "full"
+    ? { pHashes: db.getFullPHashes(), dHashes: db.getFullDHashes() }
+    : { pHashes: db.getPHashes(), dHashes: db.getDHashes() };
+}
 
 export interface MatchResult {
   illustrationId: string;
@@ -20,9 +48,10 @@ export interface MatchResult {
  * Find the top-N closest matches for a given hash pair.
  *
  * @param db - The loaded hash database
- * @param queryPHash - pHash of the scanned art region
- * @param queryDHash - dHash of the scanned art region
+ * @param queryPHash - pHash of the scanned image
+ * @param queryDHash - dHash of the scanned image
  * @param topN - Number of results to return (default 5)
+ * @param space - Which hash space the query was computed in (default "art")
  * @returns Array of matches sorted by combined score (best first)
  */
 export function findMatches(
@@ -30,9 +59,11 @@ export function findMatches(
   queryPHash: bigint,
   queryDHash: bigint,
   topN = 5,
+  space: HashSpace = "art",
 ): MatchResult[] {
-  const pHashes = db.getPHashes();
-  const dHashes = db.getDHashes();
+  if (space === "full" && !db.hasFullCardHashes) return [];
+
+  const { pHashes, dHashes } = hashArrays(db, space);
   const size = db.size;
 
   // Brute-force search over all entries
@@ -40,6 +71,10 @@ export function findMatches(
   const results: MatchResult[] = [];
 
   for (let i = 0; i < size; i++) {
+    // An all-zero pair means this illustration had no image in that space at
+    // build time. Comparing against it would score any near-zero query highly.
+    if (pHashes[i] === 0n && dHashes[i] === 0n) continue;
+
     const pDist = hammingDistance64(queryPHash, pHashes[i]);
     const dDist = hammingDistance64(queryDHash, dHashes[i]);
 
@@ -72,10 +107,11 @@ export function findMatches(
  * Used for scan-to-select mode.
  *
  * @param db - The loaded hash database
- * @param queryPHash - pHash of the scanned art region
- * @param queryDHash - dHash of the scanned art region
+ * @param queryPHash - pHash of the scanned image
+ * @param queryDHash - dHash of the scanned image
  * @param illustrationIds - Set of illustration IDs to search within
  * @param topN - Number of results to return
+ * @param space - Which hash space the query was computed in (default "art")
  */
 export function findMatchesInSubset(
   db: HashDB,
@@ -83,15 +119,18 @@ export function findMatchesInSubset(
   queryDHash: bigint,
   illustrationIds: Set<string>,
   topN = 5,
+  space: HashSpace = "art",
 ): MatchResult[] {
-  const pHashes = db.getPHashes();
-  const dHashes = db.getDHashes();
+  if (space === "full" && !db.hasFullCardHashes) return [];
+
+  const { pHashes, dHashes } = hashArrays(db, space);
   const size = db.size;
   const results: MatchResult[] = [];
 
   for (let i = 0; i < size; i++) {
     const id = db.getIllustrationId(i);
     if (!illustrationIds.has(id)) continue;
+    if (pHashes[i] === 0n && dHashes[i] === 0n) continue;
 
     const pDist = hammingDistance64(queryPHash, pHashes[i]);
     const dDist = hammingDistance64(queryDHash, dHashes[i]);
