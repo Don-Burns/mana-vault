@@ -16,13 +16,14 @@
  * In Deno (tests), the .cjs extension triggers CommonJS loading.
  *
  * ── Types ──────────────────────────────────────────────────────────
- * OpenCV.js ships no type declarations. The `mirada` package provides
- * typings, but they model the C++-style OpenCV API and don't cover several
- * OpenCV.js runtime specifics we rely on (`.delete()`, `.intAt()`, typed-array
- * `.data`, constructable `cv.Mat`/`cv.Size`/`cv.Rect`, integer enum constants,
- * etc.). Rather than fight that mismatch, we declare a focused, accurate
- * description of exactly the OpenCV.js surface this project uses (`Cv`, `Mat`,
- * `MatVector`, `Rect`, `Size`) and export it for consumers.
+ * OpenCV.js ships no type declarations. We intentionally keep a local,
+ * focused type surface here (`Cv`, `Mat`, `MatVector`, `Rect`, `Size`) that
+ * describes exactly the OpenCV.js runtime API this project uses, including
+ * JS/WASM-specific behavior (`.delete()`, `.intAt()`, typed-array `.data`,
+ * constructable `cv.Mat`/`cv.Size`/`cv.Rect`, integer enum constants, etc.).
+ *
+ * This keeps OpenCV-facing code strongly typed without depending on a
+ * third-party binding/type package whose API model may drift from OpenCV.js.
  */
 
 // @ts-ignore — opencv.js has no type declarations of its own.

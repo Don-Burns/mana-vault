@@ -104,14 +104,16 @@ The `.cjs` file is ~10.5 MB and gitignored. Run `deno task opencv:download` afte
 
 ### OpenCV.js Types
 
-OpenCV.js ships **no** type declarations. The `mirada` npm package provides
-typings, but they model the C++-style OpenCV API and don't cover OpenCV.js
-runtime specifics we depend on (`.delete()`, `.intAt()`, typed-array `.data`,
-constructable `cv.Mat`/`cv.Size`/`cv.Rect`, integer enum constants, etc.).
+OpenCV.js ships **no** type declarations. We intentionally define a local,
+focused `Cv`/`Mat`/`MatVector`/`Rect`/`Size` type surface in
+`vendor/opencv/mod.ts` that matches the OpenCV.js runtime API we actually use,
+including JS/WASM-specific behavior (`.delete()`, `.intAt()`, typed-array
+`.data`, constructable `cv.Mat`/`cv.Size`/`cv.Rect`, integer enum constants,
+etc.).
 
-So `vendor/opencv/mod.ts` declares its own focused, accurate `Cv`/`Mat`/
-`MatVector`/`Rect`/`Size` interfaces covering exactly the API surface this
-project uses, and casts the runtime `cv` object to `Cv`. **There is no `any` in
+This keeps the project strongly typed without depending on a third-party
+binding/type package whose API model may drift from OpenCV.js. The wrapper
+casts the runtime `cv` object to `Cv`. **There is no `any` in
 the OpenCV-facing code** — `pipeline.ts`, `identify.ts`, `detection-worker.ts`,
 and the tests all use these types. When you add a new OpenCV call, add its
 signature/constant to the `Cv` interface in `mod.ts` rather than reaching for
