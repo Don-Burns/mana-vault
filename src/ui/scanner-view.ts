@@ -2,6 +2,7 @@ import { Camera } from "../camera/capture.ts";
 import { CardDetector, DetectionResult } from "../detection/detector.ts";
 import { type StagedCard, StagingList } from "../collection/staging.ts";
 import { type CardEntry, collectionStore } from "../collection/store.ts";
+import { ScanDedupTracker } from "./scan-dedup.ts";
 
 type ScanMode = "add" | "remove" | "move";
 
@@ -50,6 +51,11 @@ export function ScannerView(container: HTMLElement) {
   const CORNER_TOLERANCE = 15;
   let lastCaptureTime = 0;
   const CAPTURE_COOLDOWN = 2000; // ms between captures to avoid duplicates
+
+  // Suppress re-adding the same card while it just sits in view. Cleared once
+  // the view has been empty for a bit, so removing and re-showing the same
+  // card is treated as a fresh scan.
+  const dedup = new ScanDedupTracker(500);
 
   // Minimum match confidence (%) required to accept a card into staging.
   // Below this the guess is still shown (in red) so the user can see what the
@@ -214,6 +220,7 @@ export function ScannerView(container: HTMLElement) {
 
       // Stability tracking
       if (result.found && result.corners) {
+        dedup.onFound();
         if (cornersAreStable(result.corners)) {
           stableFrameCount++;
           if (stableFrameCount >= STABLE_THRESHOLD) {
@@ -231,6 +238,7 @@ export function ScannerView(container: HTMLElement) {
       } else {
         stableFrameCount = 0;
         lastCorners = null;
+        dedup.onNotFound(Date.now());
       }
     } finally {
       isProcessing = false;
@@ -302,6 +310,24 @@ export function ScannerView(container: HTMLElement) {
       .sort((a, b) => b.released_at.localeCompare(a.released_at))[0] ||
       illustration.printings[0];
 
+    // Same physical card still sitting in view: skip re-adding unless the
+    // view has been empty for a bit (card removed and re-shown = fresh scan).
+    const lastStaged = staging.getAll().at(-1);
+    if (dedup.shouldSkip(defaultPrinting.id, lastStaged?.scryfallId)) {
+      statusEl.style.color = "";
+      statusEl.textContent = `${illustration.name} (${bestMatch.confidence}%)`;
+      showMatchSplash(
+        best.cardImage,
+        illustration.name,
+        bestMatch.confidence,
+        true,
+      );
+      setTimeout(() => {
+        statusEl.textContent = "Ready - point at a card";
+      }, 2000);
+      return;
+    }
+
     // Add to staging
     staging.add({
       illustrationId: bestMatch.illustrationId,
@@ -322,6 +348,7 @@ export function ScannerView(container: HTMLElement) {
         lang: p.lang,
       })),
     });
+    dedup.recordCapture();
 
     statusEl.style.color = "";
     statusEl.textContent = `${illustration.name} (${bestMatch.confidence}%)`;
