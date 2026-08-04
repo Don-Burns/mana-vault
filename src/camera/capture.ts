@@ -158,7 +158,7 @@ export class Camera {
     canvas.width = this.videoEl.videoWidth;
     canvas.height = this.videoEl.videoHeight;
 
-    const ctx = canvas.getContext("2d")!;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
     ctx.drawImage(this.videoEl, 0, 0);
     return ctx;
   }
