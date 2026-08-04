@@ -20,7 +20,7 @@ const OPENCV_URL =
 const ZIP_ENTRY = "js/bin/opencv.js";
 
 const VENDOR_DIR = join(Deno.cwd(), "vendor", "opencv");
-const OUTPUT_FILE = join(VENDOR_DIR, "opencv.cjs");
+const OUTPUT_FILE = join(VENDOR_DIR, "opencv.mjs");
 
 async function main() {
   console.log(`Downloading OpenCV.js ${OPENCV_VERSION}...`);
@@ -56,21 +56,22 @@ async function main() {
   // Apply compatibility patches
   console.log("Applying compatibility patches...");
   const patched = patchOpenCV(jsSource);
+  const esmModule = wrapAsEsm(patched);
 
   // Write to vendor directory
   await Deno.mkdir(VENDOR_DIR, { recursive: true });
-  await Deno.writeTextFile(OUTPUT_FILE, patched);
+  await Deno.writeTextFile(OUTPUT_FILE, esmModule);
 
   // Cleanup temp files
   await Deno.remove(tmpDir, { recursive: true });
 
-  const sizeMB = new TextEncoder().encode(patched).length / 1024 / 1024;
+  const sizeMB = new TextEncoder().encode(esmModule).length / 1024 / 1024;
   console.log(`  Written to ${OUTPUT_FILE} (${sizeMB.toFixed(1)} MB)`);
   console.log("\nDone! OpenCV.js is ready.");
 }
 
 /**
- * Apply patches to make OpenCV.js work as an ES module and in Deno.
+ * Apply patches to make OpenCV.js runtime-initialization work in Deno.
  *
  * Patches:
  * 1. Deno's Node.js compatibility shim makes Emscripten's environment
@@ -139,6 +140,27 @@ function patchOpenCV(source: string): string {
   }
 
   return patched;
+}
+
+/**
+ * Wrap the patched UMD build into a real ES module with a default export.
+ *
+ * Vite dev serves source files directly and does not run CommonJS transforms
+ * for local `.cjs` files outside `node_modules`. By defining local
+ * `module.exports` and then exporting it explicitly, we make the bundle load
+ * consistently in browsers, workers, builds, and Deno tests.
+ */
+function wrapAsEsm(umdSource: string): string {
+  return [
+    "const module = { exports: {} };",
+    "const exports = module.exports;",
+    umdSource,
+    "",
+    "const cv = module.exports;",
+    'if (!cv) throw new Error("OpenCV UMD module did not set module.exports");',
+    "export default cv;",
+    "",
+  ].join("\n");
 }
 
 main().catch((err) => {

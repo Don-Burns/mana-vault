@@ -27,7 +27,7 @@ deno task preview      # Serve the production build (use this to test real SW ca
 deno task db:download  # Download Scryfall bulk card data → data/bulk/
 deno task db:art       # Download art crop images → data/art/ (hours, resumable)
 deno task db:build     # Generate hash-db.bin + metadata.json → public/db/
-deno task opencv:download  # Download & patch OpenCV.js 4.13.0 → vendor/opencv/opencv.cjs
+deno task opencv:download  # Download & patch OpenCV.js 4.13.0 → vendor/opencv/opencv.mjs
 deno task test         # Run tests (deno test -A)
 ```
 
@@ -90,17 +90,17 @@ OpenCV.js is **vendored** (not installed from npm). The setup:
    - Downloads the official OpenCV 4.13.0 release zip from GitHub
    - Extracts `js/bin/opencv.js` (the UMD build with base64-embedded WASM)
    - Applies 3 patches for Deno compatibility (Emscripten's environment detection mistakes Deno for Node.js due to Deno's `process` shim)
-   - Writes the patched file to `vendor/opencv/opencv.cjs`
+   - Wraps the patched UMD in ESM and writes `vendor/opencv/opencv.mjs`
 
 2. `vendor/opencv/mod.ts` is the ES module wrapper that:
-   - Imports the CJS file (`.cjs` extension ensures Deno loads it as CommonJS)
+   - Imports the vendored ESM file (`opencv.mjs`)
    - Waits for `onRuntimeInitialized` via top-level await
    - Re-exports the ready-to-use `cv` object as the default export
    - **Exports TypeScript types** (`Cv`, `Mat`, `MatVector`, `Rect`, `Size`) describing the subset of the OpenCV.js API this project uses
 
 3. Both the browser worker (`src/workers/detection-worker.ts`) and Deno tests import from `vendor/opencv/mod.ts`
 
-The `.cjs` file is ~10.5 MB and gitignored. Run `deno task opencv:download` after cloning.
+The `.mjs` file is ~10.5 MB and gitignored. Run `deno task opencv:download` after cloning.
 
 ### OpenCV.js Types
 
@@ -249,7 +249,7 @@ via `vite-plugin-pwa` in `injectManifest` mode. Key points:
 | `download-bulk.ts`   | 169   | Fetch Scryfall bulk JSON, extract fields, handle DFCs, write cards.json                               |
 | `download-art.ts`    | 177   | Download art_crop JPEGs per illustration_id. Rate-limited, resumable via .progress.json               |
 | `build-hashdb.ts`    | 230   | Compute hashes with sharp (imports hash-core.ts), write binary DB + metadata JSON, copy to public/db/ |
-| `download-opencv.ts` | ~80   | Download OpenCV.js 4.13.0 from GitHub, patch for Deno, write to vendor/opencv/opencv.cjs              |
+| `download-opencv.ts` | ~100  | Download OpenCV.js 4.13.0 from GitHub, patch for Deno, wrap as ESM, write to vendor/opencv/opencv.mjs |
 
 ## Detection Pipeline Details
 

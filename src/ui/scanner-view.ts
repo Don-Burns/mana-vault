@@ -124,7 +124,9 @@ export function ScannerView(container: HTMLElement) {
           : "OpenCV ready (no DB - detection only)";
       })
       .catch((err) => {
-        statusEl.textContent = `OpenCV failed: ${err.message}`;
+        const msg = `OpenCV failed: ${err.message}`;
+        console.error(msg);
+        statusEl.textContent = msg;
         statusEl.style.background = "rgba(233, 69, 96, 0.9)";
       });
 

@@ -86,6 +86,8 @@ hashing to identify cards by their artwork — no internet required at scan time
 
 ## Architecture
 
+- OpenCV vendoring/runtime details: [docs/opencv_vendoring.md](docs/opencv_vendoring.md)
+
 ### System Overview
 
 ```

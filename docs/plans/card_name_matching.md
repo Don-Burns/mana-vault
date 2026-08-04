@@ -11,7 +11,7 @@ Add two complementary, non-camera-hash paths to identify/verify cards:
 - `findMatches` returns top-N by Hamming distance (`src/matching/matcher.ts:28`); accept threshold is 20% art confidence.
 - `metadata.json` maps `illustration_id → { name, printings[] }` (`tools/config.ts:53`); English is the primary name (`tools/build-hashdb.ts:87`).
 - Scanner UI reads `metadata.illustrations[id].name` and builds staging items (`src/ui/scanner-view.ts:229,261,281`).
-- OpenCV.js build (`vendor/opencv/opencv.cjs`) has `dnn`/EAST (text **detection**) but **no** `cv.text`/`OCRTesseract` (no text **recognition**). Hence Tesseract.js for recognition.
+- OpenCV.js build (`vendor/opencv/opencv.mjs`) has `dnn`/EAST (text **detection**) but **no** `cv.text`/`OCRTesseract` (no text **recognition**). Hence Tesseract.js for recognition.
 
 ## Engine decision
 - **OpenCV** for title-strip isolation + preprocessing (uses existing dep).

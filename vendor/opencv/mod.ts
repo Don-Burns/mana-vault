@@ -2,8 +2,8 @@
  * OpenCV.js ES Module Wrapper
  *
  * Re-exports the vendored OpenCV.js build as an ES module default export.
- * The underlying opencv.cjs is a UMD/CommonJS build patched for Deno
- * compatibility by tools/download-opencv.ts.
+ * The underlying opencv.mjs is a patched UMD build wrapped as an ES module by
+ * tools/download-opencv.ts.
  *
  * The Emscripten module compiles WASM asynchronously. We await its
  * onRuntimeInitialized callback at the top level so consumers get a
@@ -12,8 +12,8 @@
  * Usage:
  *   import cv, { type Cv, type Mat } from "../../vendor/opencv/mod.ts";
  *
- * In the browser (via Vite), the CJS module is bundled into ESM.
- * In Deno (tests), the .cjs extension triggers CommonJS loading.
+ * In both the browser (via Vite) and Deno (tests), the vendored file is loaded
+ * as a native ES module.
  *
  * ── Types ──────────────────────────────────────────────────────────
  * OpenCV.js ships no type declarations. We intentionally keep a local,
@@ -27,7 +27,7 @@
  */
 
 // @ts-ignore — opencv.js has no type declarations of its own.
-import _cv from "./opencv.cjs";
+import cv from "./opencv.mjs";
 
 /**
  * A perceptual view of an OpenCV.js `cv.Mat`. Only the members used across the
@@ -162,15 +162,15 @@ export interface Cv {
   readonly CV_32FC2: CvEnum;
 }
 
-const cv = _cv as unknown as Cv;
+const typedCv = cv as unknown as Cv;
 
 // Wait for the WASM runtime to initialize before exporting.
 // If cv.Mat already exists, the runtime is ready (e.g. Vite pre-bundled).
 // Otherwise, wait for the onRuntimeInitialized callback.
-if (!cv.Mat) {
+if (!typedCv.Mat) {
   await new Promise<void>((resolve) => {
-    cv.onRuntimeInitialized = () => resolve();
+    typedCv.onRuntimeInitialized = () => resolve();
   });
 }
 
-export default cv;
+export default typedCv;
