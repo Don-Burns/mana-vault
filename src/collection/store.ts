@@ -239,6 +239,19 @@ class CollectionStore {
   }
 
   /**
+   * Find a card in a specific folder by illustration ID (any printing of the
+   * same artwork). Used as a fallback when the exact printing scanned isn't
+   * the one already in the folder.
+   */
+  async findCardInFolderByIllustration(
+    folderId: string,
+    illustrationId: string,
+  ): Promise<CardEntry | undefined> {
+    const cards = await this.getCardsByFolder(folderId);
+    return cards.find((c) => c.illustrationId === illustrationId);
+  }
+
+  /**
    * Add a card to a folder. If the same printing already exists in the folder,
    * increment the quantity instead.
    */

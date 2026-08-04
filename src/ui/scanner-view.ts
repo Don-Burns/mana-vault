@@ -1,7 +1,9 @@
 import { Camera } from "../camera/capture.ts";
 import { CardDetector, DetectionResult } from "../detection/detector.ts";
 import { type StagedCard, StagingList } from "../collection/staging.ts";
-import { collectionStore, type Folder } from "../collection/store.ts";
+import { type CardEntry, collectionStore } from "../collection/store.ts";
+
+type ScanMode = "add" | "remove" | "move";
 
 // Metadata type matching what build-hashdb.ts generates
 interface CardMetadata {
@@ -32,6 +34,8 @@ export function ScannerView(container: HTMLElement) {
   /** The frame that produced `lastDetection`, kept so it can be identified. */
   let lastFrame: ImageData | null = null;
   let destinationFolderId: string | null = null;
+  let secondaryFolderId: string | null = null; // "To" folder, only used in Move mode
+  let mode: ScanMode = "add";
   const staging = new StagingList();
 
   // Frame sampling rate for the detection loop. Detection doesn't benefit from
@@ -71,7 +75,15 @@ export function ScannerView(container: HTMLElement) {
     </div>
     <div class="scanner-controls">
       <div class="scanner-controls-left">
+        <select id="mode-select" class="mode-select">
+          <option value="add">Add</option>
+          <option value="remove">Remove</option>
+          <option value="move">Move</option>
+        </select>
         <select id="folder-select" class="folder-select">
+          <option value="">Select folder...</option>
+        </select>
+        <select id="dest-folder-select" class="folder-select hidden">
           <option value="">Select folder...</option>
         </select>
       </div>
@@ -92,13 +104,27 @@ export function ScannerView(container: HTMLElement) {
       "#overlay-canvas",
     )!;
     const folderSelect = el.querySelector<HTMLSelectElement>("#folder-select")!;
+    const destFolderSelect = el.querySelector<HTMLSelectElement>(
+      "#dest-folder-select",
+    )!;
+    const modeSelect = el.querySelector<HTMLSelectElement>("#mode-select")!;
     const stagingBtn = el.querySelector<HTMLButtonElement>("#btn-staging")!;
 
     // Load folder list
     await populateFolderSelect(folderSelect);
+    await populateFolderSelect(destFolderSelect);
 
     folderSelect.addEventListener("change", () => {
       destinationFolderId = folderSelect.value || null;
+    });
+
+    destFolderSelect.addEventListener("change", () => {
+      secondaryFolderId = destFolderSelect.value || null;
+    });
+
+    modeSelect.addEventListener("change", () => {
+      mode = modeSelect.value as ScanMode;
+      destFolderSelect.classList.toggle("hidden", mode !== "move");
     });
 
     // Load card metadata (names/printings for display). The hash database
@@ -165,9 +191,9 @@ export function ScannerView(container: HTMLElement) {
         `<option value="${f.id}">${escapeHtml(f.name)}</option>`
       ).join("");
 
-    // Default to "Unsorted" folder
+    // Default to "Unsorted" folder (only for the primary select)
     const defaultFolder = folders.find((f) => f.isDefault);
-    if (defaultFolder) {
+    if (defaultFolder && select.id === "folder-select") {
       select.value = defaultFolder.id;
       destinationFolderId = defaultFolder.id;
     }
@@ -327,6 +353,16 @@ export function ScannerView(container: HTMLElement) {
     const items = staging.getAll();
     if (items.length === 0) return;
 
+    const confirmDisabled = mode === "move"
+      ? !destinationFolderId || !secondaryFolderId ||
+        destinationFolderId === secondaryFolderId
+      : !destinationFolderId;
+    const confirmLabel = mode === "add"
+      ? "Add to Collection"
+      : mode === "remove"
+      ? "Remove from Collection"
+      : "Move to Collection";
+
     const reviewHtml = `
       <div class="staging-review">
         <div class="staging-review-header">
@@ -339,9 +375,9 @@ export function ScannerView(container: HTMLElement) {
         <div class="staging-actions">
           <button class="btn-sm" id="btn-clear-staging">Clear All</button>
           <button class="btn-primary" id="btn-confirm-staging" ${
-      !destinationFolderId ? "disabled" : ""
+      confirmDisabled ? "disabled" : ""
     }>
-            Add to Collection
+            ${confirmLabel}
           </button>
         </div>
       </div>
@@ -387,6 +423,25 @@ export function ScannerView(container: HTMLElement) {
         header.textContent = `Review Scanned Cards (${staging.totalQuantity})`;
       });
     });
+
+    // Quantity +/- buttons
+    overlay.querySelectorAll<HTMLElement>(".staged-qty-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.dataset.id!;
+        const delta = Number(btn.dataset.delta);
+        const item = staging.getAll().find((i) => i.id === id);
+        if (!item) return;
+        staging.setQuantity(id, item.quantity + delta);
+        const qtyEl = overlay.querySelector<HTMLElement>(
+          `.staged-card[data-id="${id}"] .card-qty`,
+        )!;
+        qtyEl.textContent = `\u00d7${
+          staging.getAll().find((i) => i.id === id)!.quantity
+        }`;
+        const header = overlay.querySelector("h2")!;
+        header.textContent = `Review Scanned Cards (${staging.totalQuantity})`;
+      });
+    });
   }
 
   function renderStagedCard(item: StagedCard): string {
@@ -398,36 +453,94 @@ export function ScannerView(container: HTMLElement) {
           <span class="staged-confidence">${item.confidence}% match</span>
         </div>
         <div class="staged-actions">
+          <button class="btn-sm staged-qty-btn" data-id="${item.id}" data-delta="-1">-</button>
           <span class="card-qty">&times;${item.quantity}</span>
+          <button class="btn-sm staged-qty-btn" data-id="${item.id}" data-delta="1">+</button>
           <button class="btn-sm staged-remove" data-id="${item.id}">Remove</button>
         </div>
       </div>
     `;
   }
 
+  /**
+   * Resolve a scanned staged card to an existing CardEntry in a folder: try
+   * the exact printing first, then fall back to any printing of the same
+   * illustration (the folder may hold a different printing than was scanned).
+   */
+  async function resolveEntry(
+    folderId: string,
+    item: StagedCard,
+  ): Promise<CardEntry | undefined> {
+    return (await collectionStore.findCardInFolder(folderId, item.scryfallId)) ??
+      (await collectionStore.findCardInFolderByIllustration(
+        folderId,
+        item.illustrationId,
+      ));
+  }
+
   async function confirmStaging() {
     if (!destinationFolderId) return;
 
     const items = staging.getAll();
-    for (const item of items) {
-      await collectionStore.addCard({
-        folderId: destinationFolderId,
-        scryfallId: item.scryfallId,
-        illustrationId: item.illustrationId,
-        oracleId: item.oracleId,
-        name: item.name,
-        setCode: item.setCode,
-        setName: item.setName,
-        collectorNumber: item.collectorNumber,
-        quantity: item.quantity,
-        condition: item.condition,
-        notes: "",
-      });
+    const statusEl = el.querySelector<HTMLElement>("#scanner-status")!;
+    let skipped = 0;
+
+    if (mode === "add") {
+      for (const item of items) {
+        await collectionStore.addCard({
+          folderId: destinationFolderId,
+          scryfallId: item.scryfallId,
+          illustrationId: item.illustrationId,
+          oracleId: item.oracleId,
+          name: item.name,
+          setCode: item.setCode,
+          setName: item.setName,
+          collectorNumber: item.collectorNumber,
+          quantity: item.quantity,
+          condition: item.condition,
+          notes: "",
+        });
+      }
+      statusEl.textContent = `Added ${staging.totalQuantity} card(s) to collection!`;
+    } else if (mode === "remove") {
+      for (const item of items) {
+        const entry = await resolveEntry(destinationFolderId, item);
+        if (!entry) {
+          skipped++;
+          continue;
+        }
+        if (item.quantity >= entry.quantity) {
+          await collectionStore.deleteCard(entry.id);
+        } else {
+          entry.quantity -= item.quantity;
+          await collectionStore.putCard(entry);
+        }
+      }
+      const removedCount = items.length - skipped;
+      statusEl.textContent = skipped > 0
+        ? `Removed ${removedCount} card(s), ${skipped} skipped (not in folder)`
+        : `Removed ${removedCount} card(s) from collection!`;
+    } else {
+      // move
+      if (!secondaryFolderId) return;
+      for (const item of items) {
+        const entry = await resolveEntry(destinationFolderId, item);
+        if (!entry) {
+          skipped++;
+          continue;
+        }
+        await collectionStore.moveCard(
+          entry.id,
+          secondaryFolderId,
+          Math.min(item.quantity, entry.quantity),
+        );
+      }
+      const movedCount = items.length - skipped;
+      statusEl.textContent = skipped > 0
+        ? `Moved ${movedCount} card(s), ${skipped} skipped (not in folder)`
+        : `Moved ${movedCount} card(s) between collections!`;
     }
 
-    const statusEl = el.querySelector<HTMLElement>("#scanner-status")!;
-    statusEl.textContent =
-      `Added ${staging.totalQuantity} card(s) to collection!`;
     staging.clear();
 
     setTimeout(() => {

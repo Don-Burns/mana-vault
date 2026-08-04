@@ -116,13 +116,15 @@ html, body {
 .scanner-controls-right {
   flex: 1;
   display: flex;
+  gap: 0.4rem;
 }
 
 .scanner-controls-right {
   justify-content: flex-end;
 }
 
-.folder-select {
+.folder-select,
+.mode-select {
   width: 100%;
   max-width: 140px;
   padding: 0.4rem;
@@ -131,6 +133,11 @@ html, body {
   background: var(--bg-primary);
   color: var(--text-primary);
   font-size: 0.8rem;
+}
+
+.mode-select {
+  max-width: 90px;
+  flex-shrink: 0;
 }
 
 .btn-staging {
