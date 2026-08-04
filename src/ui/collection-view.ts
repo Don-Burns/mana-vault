@@ -8,6 +8,7 @@ import {
   exportAsJSON,
   importFromJSON,
 } from "../collection/export.ts";
+import { openMergeView } from "./merge-view.ts";
 export function CollectionView(container: HTMLElement) {
   const el = document.createElement("div");
   el.className = "view collection-view";
@@ -304,14 +305,42 @@ export function CollectionView(container: HTMLElement) {
     dialog.close();
     if (!destFolderId) return;
 
-    await collectionStore.moveCards([...selectedCardIds], destFolderId);
+    const cardIds = [...selectedCardIds];
+    const sourceCards = await collectionStore.getCardsByFolder(currentFolderId!);
+    const destCards = await collectionStore.getCardsByFolder(destFolderId);
+    const moving = sourceCards.filter((c) => cardIds.includes(c.id));
 
-    selectedCardIds.clear();
-    editMode = false;
-    el.querySelector<HTMLButtonElement>("#btn-edit-mode")!.textContent =
-      "Edit";
-    await renderCardList(currentFolderId!);
-    updateSelectionBar();
+    // Full move: each selected entry's whole quantity relocates (matches
+    // moveCards, which moves without a partial-quantity argument).
+    const sourceAfter = sourceCards.filter((c) => !cardIds.includes(c.id));
+    const destAfter = destCards.map((c) => ({ ...c }));
+    for (const card of moving) {
+      const existing = destAfter.find((c) => c.scryfallId === card.scryfallId);
+      if (existing) {
+        existing.quantity += card.quantity;
+      } else {
+        destAfter.push({ ...card, folderId: destFolderId });
+      }
+    }
+
+    openMergeView({
+      container: el,
+      stagingCards: moving,
+      panels: [
+        { title: "Source", before: sourceCards, after: sourceAfter },
+        { title: "Destination", before: destCards, after: destAfter },
+      ],
+      confirmLabel: "Move to Collection",
+      onConfirm: async () => {
+        await collectionStore.moveCards(cardIds, destFolderId);
+        selectedCardIds.clear();
+        editMode = false;
+        el.querySelector<HTMLButtonElement>("#btn-edit-mode")!.textContent =
+          "Edit";
+        await renderCardList(currentFolderId!);
+        updateSelectionBar();
+      },
+    });
   }
 
   // ─── Navigation ─────────────────────────────────────────────────

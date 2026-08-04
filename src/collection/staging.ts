@@ -21,6 +21,9 @@ export interface StagedCard {
   confidence: number; // Match confidence (0-100)
   alternativePrintings?: AlternativePrinting[]; // Other printings of same illustration
   scannedAt: string;
+  cmc?: number;
+  colors?: string[];
+  rarity?: string;
 }
 
 export interface AlternativePrinting {

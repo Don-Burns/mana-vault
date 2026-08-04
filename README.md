@@ -231,6 +231,11 @@ mtg_scanner_js/
 │
 ├── tests/                    # Full-pipeline + unit tests (deno test)
 │   ├── card_detection_test.ts
+│   ├── scan_dedup_test.ts
+│   ├── staging_test.ts
+│   ├── store_test.ts
+│   ├── sort_test.ts
+│   ├── diff_test.ts
 │   └── data/input/           # Real card photos used as fixtures
 └── dist/                     # Production build output
 ```

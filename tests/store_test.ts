@@ -8,7 +8,7 @@
 
 import { assertEquals, assertRejects } from "@std/assert";
 import { connect } from "@tursodatabase/database";
-import { collectionStore, type CardEntry } from "./store.ts";
+import { collectionStore, type CardEntry } from "../src/collection/store.ts";
 
 async function freshStore() {
   const path = await Deno.makeTempFile({ suffix: ".db" });

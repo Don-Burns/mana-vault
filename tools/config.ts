@@ -43,6 +43,9 @@ export interface CardData {
   image_uri_art_crop: string; // art_crop image URL
   image_uri_art_full: string; // full art image URL
   released_at: string;
+  cmc: number;
+  colors: string[];
+  rarity: string;
 }
 
 /** Structure for the metadata JSON */
@@ -53,6 +56,8 @@ export interface CardMetadata {
 export interface IllustrationEntry {
   oracle_id: string;
   name: string; // Primary English name
+  cmc: number;
+  colors: string[];
   printings: PrintingInfo[];
 }
 
@@ -63,6 +68,7 @@ export interface PrintingInfo {
   collector_number: string;
   lang: string;
   released_at: string;
+  rarity: string;
 }
 
 /** Ensure all data directories exist */

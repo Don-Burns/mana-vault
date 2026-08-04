@@ -22,6 +22,31 @@ The scanner has a mode dropdown with three options: **Add**, **Remove**, **Move*
 
 In all modes, the staging review screen lets the user adjust the quantity of each staged card (+/-) or remove it entirely before confirming.
 
+### Merge Viewer
+
+Confirming a staging review (Add/Remove/Move) or a collection-view "Move
+selected" opens the **Merge Viewer** — a diff-style preview shown before
+anything is written to a collection, so the user can see exactly what will
+change first. It shows:
+
+- A plain **staging** panel: the cards about to be applied (no diff
+  coloring — it's not a collection yet, just what you're about to apply).
+- One diffed panel per **real collection** touched by the operation: Add →
+  destination folder only; Remove → source folder only; Move (scanner or
+  collection-view) → both source and destination folders. Each panel shows
+  the folder's current contents with the pending change applied: full
+  additions and removals are highlighted as whole rows (green/red); quantity
+  changes highlight just the new number (green for increases, red for
+  decreases); unchanged cards render plain, for context.
+- A single ordering control (name, set + collector number, quantity, mana
+  value, color, or rarity) that applies to every panel at once, so rows line
+  up across panels.
+- Any scanned cards that couldn't be matched to a folder entry (Remove/Move)
+  are called out with a skipped-count note.
+
+Confirm/Cancel in the merge viewer replaces the previous direct-commit
+behavior — nothing is written to a collection until the user confirms here.
+
 ### Checking-In Cards to Collections
 
 When a user wants to save the cards in their staging list to a collection, they can check-in the cards to a collection.

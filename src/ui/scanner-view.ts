@@ -3,6 +3,7 @@ import { CardDetector, DetectionResult } from "../detection/detector.ts";
 import { type StagedCard, StagingList } from "../collection/staging.ts";
 import { type CardEntry, collectionStore } from "../collection/store.ts";
 import { ScanDedupTracker } from "./scan-dedup.ts";
+import { openMergeView } from "./merge-view.ts";
 
 type ScanMode = "add" | "remove" | "move";
 
@@ -11,6 +12,8 @@ interface CardMetadata {
   illustrations: Record<string, {
     oracle_id: string;
     name: string;
+    cmc: number;
+    colors: string[];
     printings: {
       id: string;
       set: string;
@@ -18,6 +21,7 @@ interface CardMetadata {
       collector_number: string;
       lang: string;
       released_at: string;
+      rarity: string;
     }[];
   }>;
 }
@@ -340,6 +344,9 @@ export function ScannerView(container: HTMLElement) {
       quantity: 1,
       condition: "NM",
       confidence: bestMatch.confidence,
+      cmc: illustration.cmc,
+      colors: illustration.colors,
+      rarity: defaultPrinting.rarity,
       alternativePrintings: illustration.printings.map((p) => ({
         scryfallId: p.id,
         setCode: p.set,
@@ -505,7 +512,115 @@ export function ScannerView(container: HTMLElement) {
       ));
   }
 
+  /**
+   * Resolve a scanned staged card against an already-fetched folder card
+   * list (sync, no store round-trip) — used to build the merge-view preview
+   * with the same matching rules as `resolveEntry`.
+   */
+  function resolveFromList(
+    cards: CardEntry[],
+    item: StagedCard,
+  ): CardEntry | undefined {
+    return cards.find((c) => c.scryfallId === item.scryfallId) ??
+      cards.find((c) => c.illustrationId === item.illustrationId);
+  }
+
+  /** Simulate applying an Add of `items` onto `cards` (for merge-view preview). */
+  function simulateAdd(cards: CardEntry[], items: readonly StagedCard[]): CardEntry[] {
+    const result = cards.map((c) => ({ ...c }));
+    for (const item of items) {
+      const existing = result.find((c) => c.scryfallId === item.scryfallId);
+      if (existing) {
+        existing.quantity += item.quantity;
+      } else {
+        result.push({
+          id: item.id,
+          folderId: "",
+          scryfallId: item.scryfallId,
+          illustrationId: item.illustrationId,
+          oracleId: item.oracleId,
+          name: item.name,
+          setCode: item.setCode,
+          setName: item.setName,
+          collectorNumber: item.collectorNumber,
+          quantity: item.quantity,
+          condition: item.condition,
+          notes: "",
+          dateAdded: "",
+          cmc: item.cmc,
+          colors: item.colors,
+          rarity: item.rarity,
+        });
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Simulate removing `items`' quantities from `cards` (for merge-view
+   * preview). Cards that would drop to 0 are dropped entirely, matching
+   * `computeDiff`'s "removed" semantics.
+   */
+  function simulateRemove(cards: CardEntry[], items: readonly StagedCard[]): CardEntry[] {
+    const result = cards.map((c) => ({ ...c }));
+    for (const item of items) {
+      const entry = resolveFromList(result, item);
+      if (!entry) continue;
+      entry.quantity = Math.max(0, entry.quantity - item.quantity);
+    }
+    return result.filter((c) => c.quantity > 0);
+  }
+
   async function confirmStaging() {
+    if (!destinationFolderId) return;
+    if (mode === "move" && !secondaryFolderId) return;
+
+    const items = staging.getAll();
+
+    if (mode === "add") {
+      const destCards = await collectionStore.getCardsByFolder(destinationFolderId);
+      openMergeView({
+        container: el,
+        stagingCards: items as StagedCard[],
+        panels: [
+          { title: "Destination", before: destCards, after: simulateAdd(destCards, items) },
+        ],
+        confirmLabel: "Add to Collection",
+        onConfirm: () => commitStaging(),
+      });
+    } else if (mode === "remove") {
+      const destCards = await collectionStore.getCardsByFolder(destinationFolderId);
+      const skipped = items.filter((item) => !resolveFromList(destCards, item)).length;
+      openMergeView({
+        container: el,
+        stagingCards: items as StagedCard[],
+        panels: [
+          { title: "Source", before: destCards, after: simulateRemove(destCards, items) },
+        ],
+        skippedCount: skipped,
+        confirmLabel: "Remove from Collection",
+        onConfirm: () => commitStaging(),
+      });
+    } else {
+      // move
+      const sourceCards = await collectionStore.getCardsByFolder(destinationFolderId);
+      const destCards = await collectionStore.getCardsByFolder(secondaryFolderId!);
+      const skipped = items.filter((item) => !resolveFromList(sourceCards, item)).length;
+      openMergeView({
+        container: el,
+        stagingCards: items as StagedCard[],
+        panels: [
+          { title: "Source", before: sourceCards, after: simulateRemove(sourceCards, items) },
+          { title: "Destination", before: destCards, after: simulateAdd(destCards, items) },
+        ],
+        skippedCount: skipped,
+        confirmLabel: "Move to Collection",
+        onConfirm: () => commitStaging(),
+      });
+    }
+  }
+
+  async function commitStaging() {
     if (!destinationFolderId) return;
 
     const items = staging.getAll();
@@ -526,6 +641,9 @@ export function ScannerView(container: HTMLElement) {
           quantity: item.quantity,
           condition: item.condition,
           notes: "",
+          cmc: item.cmc,
+          colors: item.colors,
+          rarity: item.rarity,
         });
       }
       statusEl.textContent = `Added ${staging.totalQuantity} card(s) to collection!`;

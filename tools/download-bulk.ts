@@ -113,6 +113,9 @@ async function main() {
             ? card.card_faces[0].image_uris.small
             : card.card_faces[0].image_uris.normal,
           released_at: card.released_at,
+          cmc: card.cmc,
+          colors: card.card_faces[0].colors ?? card.colors ?? [],
+          rarity: card.rarity,
         });
         seenIllustrations.add(
           card.card_faces[0].illustration_id || card.illustration_id,
@@ -137,6 +140,9 @@ async function main() {
         ? card.image_uris.small
         : card.image_uris.normal,
       released_at: card.released_at,
+      cmc: card.cmc,
+      colors: card.colors ?? [],
+      rarity: card.rarity,
     });
     seenIllustrations.add(card.illustration_id);
   }

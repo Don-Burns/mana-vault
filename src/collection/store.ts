@@ -35,7 +35,10 @@ const SCHEMA = `
     quantity INTEGER,
     condition TEXT,
     notes TEXT,
-    dateAdded TEXT
+    dateAdded TEXT,
+    cmc REAL,
+    colors TEXT,
+    rarity TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_cards_folderId ON cards(folderId);
   CREATE INDEX IF NOT EXISTS idx_cards_scryfallId ON cards(scryfallId);
@@ -44,6 +47,14 @@ const SCHEMA = `
   CREATE INDEX IF NOT EXISTS idx_cards_name ON cards(name);
   CREATE INDEX IF NOT EXISTS idx_cards_folder_scryfall ON cards(folderId, scryfallId);
 `;
+
+// Columns added after the initial schema. New installs get them via SCHEMA
+// above; existing databases get them via this guarded ALTER TABLE list.
+const MIGRATIONS = [
+  "ALTER TABLE cards ADD COLUMN cmc REAL",
+  "ALTER TABLE cards ADD COLUMN colors TEXT",
+  "ALTER TABLE cards ADD COLUMN rarity TEXT",
+];
 
 export type CardCondition = "NM" | "LP" | "MP" | "HP" | "DMG";
 
@@ -70,13 +81,16 @@ export interface CardEntry {
   condition: CardCondition;
   notes: string;
   dateAdded: string;
+  cmc?: number;
+  colors?: string[];
+  rarity?: string;
 }
 
 type TursoConnect = (path: string) => Promise<Database>;
 
 const FOLDER_COLUMNS = "id, name, color, sortOrder, createdAt, isDefault";
 const CARD_COLUMNS =
-  "id, folderId, scryfallId, illustrationId, oracleId, name, setCode, setName, collectorNumber, quantity, condition, notes, dateAdded";
+  "id, folderId, scryfallId, illustrationId, oracleId, name, setCode, setName, collectorNumber, quantity, condition, notes, dateAdded, cmc, colors, rarity";
 
 function folderValues(folder: Folder): unknown[] {
   return [
@@ -104,6 +118,9 @@ function cardValues(card: CardEntry): unknown[] {
     card.condition,
     card.notes,
     card.dateAdded,
+    card.cmc ?? null,
+    card.colors ? JSON.stringify(card.colors) : null,
+    card.rarity ?? null,
   ];
 }
 
@@ -133,6 +150,9 @@ function cardFromRow(row: Record<string, unknown>): CardEntry {
     condition: row.condition as CardCondition,
     notes: row.notes as string,
     dateAdded: row.dateAdded as string,
+    cmc: row.cmc == null ? undefined : row.cmc as number,
+    colors: row.colors ? JSON.parse(row.colors as string) : undefined,
+    rarity: row.rarity == null ? undefined : row.rarity as string,
   };
 }
 
@@ -156,6 +176,16 @@ class CollectionStore {
       );
     }
     await this.db.exec(SCHEMA);
+    // Guarded migration: add columns that didn't exist in earlier schema
+    // versions. Ignored if already present (SQLite errors on duplicate ADD
+    // COLUMN, which is expected on every open after the first).
+    for (const stmt of MIGRATIONS) {
+      try {
+        await this.db.exec(stmt);
+      } catch {
+        // column already exists
+      }
+    }
   }
 
   // ─── Folder Operations ──────────────────────────────────────────────
@@ -328,13 +358,14 @@ class CollectionStore {
   async putCard(card: CardEntry): Promise<void> {
     await this.db!.run(
       `INSERT INTO cards (${CARD_COLUMNS})
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          folderId = excluded.folderId, scryfallId = excluded.scryfallId,
          illustrationId = excluded.illustrationId, oracleId = excluded.oracleId,
          name = excluded.name, setCode = excluded.setCode, setName = excluded.setName,
          collectorNumber = excluded.collectorNumber, quantity = excluded.quantity,
-         condition = excluded.condition, notes = excluded.notes, dateAdded = excluded.dateAdded`,
+         condition = excluded.condition, notes = excluded.notes, dateAdded = excluded.dateAdded,
+         cmc = excluded.cmc, colors = excluded.colors, rarity = excluded.rarity`,
       ...cardValues(card),
     );
   }
@@ -382,6 +413,9 @@ class CollectionStore {
         quantity: moveQty,
         condition: card.condition,
         notes: card.notes,
+        cmc: card.cmc,
+        colors: card.colors,
+        rarity: card.rarity,
       });
     }
 
@@ -451,7 +485,7 @@ class CollectionStore {
 
       for (const card of data.cards) {
         await tx.run(
-          `INSERT INTO cards (${CARD_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO cards (${CARD_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           ...cardValues(card),
         );
       }

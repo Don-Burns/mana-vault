@@ -14,6 +14,7 @@
   --border: #333;
   --success: #4caf50;
   --warning: #ff9800;
+  --danger: #e94560;
   --radius: 8px;
 }
 
@@ -501,6 +502,145 @@ html, body {
 .staging-actions {
   display: flex;
   justify-content: space-between;
+  padding: 1rem;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
+}
+
+/* Merge viewer (diff preview before Add/Remove/Move confirm) */
+.merge-view-overlay {
+  position: absolute;
+  inset: 0;
+  background: var(--bg-primary);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.merge-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.merge-view-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+}
+
+.merge-view-header h2 {
+  font-size: 1.1rem;
+  flex: 1;
+}
+
+.merge-sort-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+}
+
+.merge-sort-field {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  padding: 0.3rem 0.6rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.merge-sort-priority {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.2rem;
+  height: 1.2rem;
+  border-radius: 50%;
+  background: var(--accent);
+  color: white;
+  font-size: 0.7rem;
+}
+
+.merge-sort-direction {
+  padding: 0.15rem 0.4rem;
+  font-size: 0.75rem;
+}
+
+.merge-view-panels {
+  flex: 1;
+  display: flex;
+  gap: 0.5rem;
+  overflow: hidden;
+  padding: 0.5rem;
+}
+
+.merge-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.merge-panel h3 {
+  font-size: 0.9rem;
+  padding: 0.25rem 0.5rem;
+  color: var(--text-secondary);
+}
+
+.merge-panel-rows {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.merge-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  margin-bottom: 0.2rem;
+}
+
+.diff-row-added {
+  background: color-mix(in srgb, var(--success) 50%, var(--bg-card));
+}
+
+.diff-row-removed {
+  background: color-mix(in srgb, var(--danger) 50%, var(--bg-card));
+}
+
+.diff-count-up {
+  color: var(--success);
+  font-weight: bold;
+}
+
+.diff-count-down {
+  color: var(--danger);
+  font-weight: bold;
+}
+
+.merge-skipped {
+  padding: 0.5rem 1rem;
+  color: var(--warning);
+  font-size: 0.85rem;
+}
+
+.merge-view-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
   padding: 1rem;
   background: var(--bg-secondary);
   border-top: 1px solid var(--border);

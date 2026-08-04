@@ -104,6 +104,8 @@ async function main() {
       metadata.illustrations[card.illustration_id] = {
         oracle_id: card.oracle_id,
         name: card.name,
+        cmc: card.cmc,
+        colors: card.colors,
         printings: [],
       };
     }
@@ -122,6 +124,7 @@ async function main() {
       collector_number: card.collector_number,
       lang: card.lang,
       released_at: card.released_at,
+      rarity: card.rarity,
     });
   }
 

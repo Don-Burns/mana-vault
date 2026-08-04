@@ -79,10 +79,10 @@ SQLite, without a browser or OPFS:
 await collectionStore.open(tempPath, nodeConnect);
 ```
 
-See `src/collection/store.test.ts`. Run with:
+See `tests/store_test.ts`. Run with:
 
 ```sh
-deno test -A src/collection/store.test.ts
+deno test -A tests/store_test.ts
 ```
 
 What this **does not** cover (requires a real browser, manual verification):
@@ -95,4 +95,4 @@ Added to `deno.json` `imports`:
 
 - `@tursodatabase/database-wasm` — runtime driver (browser/OPFS).
 - `@tursodatabase/database` — dev-only, used exclusively by
-  `store.test.ts` for the Node-native test driver.
+  `tests/store_test.ts` for the Node-native test driver.

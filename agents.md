@@ -51,6 +51,7 @@ dist/
 | `src/`           | PWA source (Vite bundles this)                                 |
 | `src/workers/`   | Web Worker for OpenCV (runs off main thread)                   |
 | `tools/`         | Deno CLI scripts for building the hash database                |
+| `tests/`         | All `deno test` specs (`*_test.ts`), regardless of what they cover — kept out of `src/`/`tools/` even for pure-unit tests of a single module |
 | `vendor/opencv/` | Vendored OpenCV.js 4.13.0 (WASM embedded, downloaded via task) |
 | `public/db/`     | Generated hash DB + metadata (gitignored, built by tools)      |
 | `data/`          | Downloaded Scryfall data (gitignored, large)                   |
