@@ -12,7 +12,10 @@
   },
   "nodeModulesDir": "auto",
   "imports": {
-    "@std/assert": "jsr:@std/assert@1"
+    "@std/assert": "jsr:@std/assert@1",
+    "@tursodatabase/database": "npm:@tursodatabase/database@^0.7.2",
+    "@tursodatabase/database-common": "npm:@tursodatabase/database-common@^0.7.2",
+    "@tursodatabase/database-wasm": "npm:@tursodatabase/database-wasm@^0.7.2"
   },
   "compilerOptions": {
     "lib": [

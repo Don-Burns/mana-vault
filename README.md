@@ -80,13 +80,14 @@ hashing to identify cards by their artwork — no internet required at scan time
 
 - **Export**: JSON (preserves folder structure) or CSV
 - **Import**: JSON import restores full collection with folders
-- **IndexedDB**: All collection data stored locally in the browser
+- **Turso (SQLite WASM)**: All collection data stored locally in the browser via OPFS
 
 ---
 
 ## Architecture
 
 - OpenCV vendoring/runtime details: [docs/opencv_vendoring.md](docs/opencv_vendoring.md)
+- Turso (SQLite/WASM) collection store details: [docs/turso_collection_db.md](docs/turso_collection_db.md)
 
 ### System Overview
 
@@ -109,7 +110,7 @@ hashing to identify cards by their artwork — no internet required at scan time
 │  └──────────┘    └────────────────┘    └────────────┘  │
 │       ↓                                      ↓          │
 │  ┌──────────────────┐    ┌─────────────────────────┐   │
-│  │  Staging List    │ →  │  Collection (IndexedDB) │   │
+│  │  Staging List    │ →  │  Collection (Turso)     │   │
 │  │  (review batch)  │    │  Folders + Cards        │   │
 │  └──────────────────┘    └─────────────────────────┘   │
 └─────────────────────────────────────────────────────────┘
@@ -168,7 +169,7 @@ guesses are still shown (in red) but not added to the collection.
 | Language                 | Vanilla TypeScript               | No framework, full control, minimal bundle size            |
 | Image Processing         | OpenCV.js (WASM)                 | Card detection, perspective correction, image manipulation |
 | Hashing                  | Custom pHash + dHash             | Perceptual hashing for art-based card identification       |
-| Storage                  | IndexedDB                        | Local collection persistence with folder/card schema       |
+| Storage                  | Turso (SQLite WASM, OPFS)         | Local collection persistence with folder/card schema       |
 | Offline                  | Service Worker (vite-plugin-pwa) | Cache app shell, WASM, hash DB for full offline use        |
 | Card Data                | Scryfall API                     | Bulk data download + art crop images (one-time)            |
 | Image Processing (build) | Sharp                            | Server-side image resizing for hash computation            |
@@ -211,7 +212,7 @@ mtg_scanner_js/
 │   │   └── matcher.ts       # Hamming distance search, confidence scoring
 │   │
 │   ├── collection/
-│   │   ├── store.ts         # IndexedDB schema, folder + card CRUD, move ops
+│   │   ├── store.ts         # Turso/SQLite schema, folder + card CRUD, move ops
 │   │   ├── staging.ts       # Scan session staging list with change events
 │   │   └── export.ts        # JSON/CSV export, JSON import
 │   │
@@ -320,20 +321,25 @@ thickness collapsed towards zero, so normally-bordered cards were reported as
 borderless and cropped in the wrong place. Showcase layouts defeated it
 outright, since their art is not where any of these rectangles say it is.
 
-### IndexedDB Schema
+### Turso (SQLite) Schema
 
-**Folders store** (keyPath: `id`):
+**`folders` table**:
 
 - `id`, `name`, `color`, `sortOrder`, `createdAt`, `isDefault`
 - Indexes: `sortOrder`, `name`
 
-**Cards store** (keyPath: `id`):
+**`cards` table**:
 
 - `id`, `folderId`, `scryfallId`, `illustrationId`, `oracleId`, `name`,
   `setCode`, `setName`, `collectorNumber`, `quantity`, `condition`, `notes`,
   `dateAdded`
 - Indexes: `folderId`, `scryfallId`, `illustrationId`, `oracleId`, `name`,
-  compound `[folderId, scryfallId]`
+  compound `(folderId, scryfallId)`
+
+The database persists to OPFS via `@tursodatabase/database-wasm`. Because
+OPFS sync access handles lock the file to one tab, opening the app in a
+second tab surfaces a clear error instead of corrupting data — only one tab
+can hold the collection DB open at a time.
 
 ### Web Worker Architecture
 
@@ -439,8 +445,14 @@ deno task preview  # Preview the production build locally
 ```
 
 Deploy the `dist/` directory to any static hosting (Netlify, Vercel, Cloudflare
-Pages, etc.). Ensure the host serves with appropriate headers for WASM
-(COOP/COEP if SharedArrayBuffer is needed).
+Pages, etc.). The host **must** send the same
+`Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp` headers as the dev server
+(`vite.config.ts`) — the Turso collection database requires
+SharedArrayBuffer/OPFS sync access handles, which the browser only exposes
+in a cross-origin-isolated context. Without these headers the collection
+store fails to open in production even though OpenCV and the rest of the
+app still work.
 
 ---
 

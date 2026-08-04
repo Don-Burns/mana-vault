@@ -45,6 +45,14 @@ export default defineConfig({
   worker: {
     format: "es",
   },
+  // The Turso WASM package uses top-level await, which the dep pre-bundler's
+  // default esbuild target (an older browser baseline) rejects. Raise it to
+  // esnext to match `build.target` above.
+  optimizeDeps: {
+    esbuildOptions: {
+      target: "esnext",
+    },
+  },
   server: {
     port: 3000,
     host: true,

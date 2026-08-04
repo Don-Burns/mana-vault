@@ -1,16 +1,49 @@
 /**
  * Collection Store
  *
- * IndexedDB-based storage for the card collection with folder support.
- * Provides CRUD operations for folders and card entries.
+ * Turso (SQLite/WASM, OPFS-backed) storage for the card collection with
+ * folder support. Provides CRUD operations for folders and card entries.
  */
 
-const DB_NAME = "mtg-scanner";
-const DB_VERSION = 1;
+import { connect } from "@tursodatabase/database-wasm/vite";
+import type { DatabasePromise as Database, Transaction } from "@tursodatabase/database-common";
 
-// Store names
-const FOLDERS_STORE = "folders";
-const CARDS_STORE = "cards";
+const DB_PATH = "mtg-scanner.db";
+
+const SCHEMA = `
+  CREATE TABLE IF NOT EXISTS folders (
+    id TEXT PRIMARY KEY,
+    name TEXT,
+    color TEXT,
+    sortOrder INTEGER,
+    createdAt TEXT,
+    isDefault INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_folders_sortOrder ON folders(sortOrder);
+  CREATE INDEX IF NOT EXISTS idx_folders_name ON folders(name);
+
+  CREATE TABLE IF NOT EXISTS cards (
+    id TEXT PRIMARY KEY,
+    folderId TEXT,
+    scryfallId TEXT,
+    illustrationId TEXT,
+    oracleId TEXT,
+    name TEXT,
+    setCode TEXT,
+    setName TEXT,
+    collectorNumber TEXT,
+    quantity INTEGER,
+    condition TEXT,
+    notes TEXT,
+    dateAdded TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_cards_folderId ON cards(folderId);
+  CREATE INDEX IF NOT EXISTS idx_cards_scryfallId ON cards(scryfallId);
+  CREATE INDEX IF NOT EXISTS idx_cards_illustrationId ON cards(illustrationId);
+  CREATE INDEX IF NOT EXISTS idx_cards_oracleId ON cards(oracleId);
+  CREATE INDEX IF NOT EXISTS idx_cards_name ON cards(name);
+  CREATE INDEX IF NOT EXISTS idx_cards_folder_scryfall ON cards(folderId, scryfallId);
+`;
 
 export type CardCondition = "NM" | "LP" | "MP" | "HP" | "DMG";
 
@@ -39,50 +72,90 @@ export interface CardEntry {
   dateAdded: string;
 }
 
+type TursoConnect = (path: string) => Promise<Database>;
+
+const FOLDER_COLUMNS = "id, name, color, sortOrder, createdAt, isDefault";
+const CARD_COLUMNS =
+  "id, folderId, scryfallId, illustrationId, oracleId, name, setCode, setName, collectorNumber, quantity, condition, notes, dateAdded";
+
+function folderValues(folder: Folder): unknown[] {
+  return [
+    folder.id,
+    folder.name,
+    folder.color,
+    folder.sortOrder,
+    folder.createdAt,
+    folder.isDefault ? 1 : 0,
+  ];
+}
+
+function cardValues(card: CardEntry): unknown[] {
+  return [
+    card.id,
+    card.folderId,
+    card.scryfallId,
+    card.illustrationId,
+    card.oracleId,
+    card.name,
+    card.setCode,
+    card.setName,
+    card.collectorNumber,
+    card.quantity,
+    card.condition,
+    card.notes,
+    card.dateAdded,
+  ];
+}
+
+function folderFromRow(row: Record<string, unknown>): Folder {
+  return {
+    id: row.id as string,
+    name: row.name as string,
+    color: row.color as string,
+    sortOrder: row.sortOrder as number,
+    createdAt: row.createdAt as string,
+    isDefault: row.isDefault === 1,
+  };
+}
+
+function cardFromRow(row: Record<string, unknown>): CardEntry {
+  return {
+    id: row.id as string,
+    folderId: row.folderId as string,
+    scryfallId: row.scryfallId as string,
+    illustrationId: row.illustrationId as string,
+    oracleId: row.oracleId as string,
+    name: row.name as string,
+    setCode: row.setCode as string,
+    setName: row.setName as string,
+    collectorNumber: row.collectorNumber as string,
+    quantity: row.quantity as number,
+    condition: row.condition as CardCondition,
+    notes: row.notes as string,
+    dateAdded: row.dateAdded as string,
+  };
+}
+
 class CollectionStore {
-  private db: IDBDatabase | null = null;
+  private db: Database | null = null;
 
   /**
    * Open the database connection. Must be called before any operations.
+   *
+   * @param path - Database file path (OPFS). Overridable for tests.
+   * @param driver - The `connect` function used to open the database.
+   *   Defaults to the Turso WASM driver; tests inject the Node native
+   *   driver (`@tursodatabase/database`), which shares the same API.
    */
-  async open(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
-
-      request.onupgradeneeded = (event) => {
-        const db = (event.target as IDBOpenDBRequest).result;
-        this.createSchema(db);
-      };
-
-      request.onsuccess = (event) => {
-        this.db = (event.target as IDBOpenDBRequest).result;
-        resolve();
-      };
-
-      request.onerror = () => {
-        reject(new Error(`Failed to open database: ${request.error?.message}`));
-      };
-    });
-  }
-
-  private createSchema(db: IDBDatabase): void {
-    // Folders store
-    if (!db.objectStoreNames.contains(FOLDERS_STORE)) {
-      const folderStore = db.createObjectStore(FOLDERS_STORE, { keyPath: "id" });
-      folderStore.createIndex("sortOrder", "sortOrder", { unique: false });
-      folderStore.createIndex("name", "name", { unique: false });
+  async open(path: string = DB_PATH, driver: TursoConnect = connect): Promise<void> {
+    try {
+      this.db = await driver(path);
+    } catch (err) {
+      throw new Error(
+        `Failed to open database (it may be open in another tab): ${(err as Error).message}`,
+      );
     }
-
-    // Cards store
-    if (!db.objectStoreNames.contains(CARDS_STORE)) {
-      const cardStore = db.createObjectStore(CARDS_STORE, { keyPath: "id" });
-      cardStore.createIndex("folderId", "folderId", { unique: false });
-      cardStore.createIndex("scryfallId", "scryfallId", { unique: false });
-      cardStore.createIndex("illustrationId", "illustrationId", { unique: false });
-      cardStore.createIndex("oracleId", "oracleId", { unique: false });
-      cardStore.createIndex("name", "name", { unique: false });
-      cardStore.createIndex("folderId_scryfallId", ["folderId", "scryfallId"], { unique: false });
-    }
+    await this.db.exec(SCHEMA);
   }
 
   // ─── Folder Operations ──────────────────────────────────────────────
@@ -109,21 +182,13 @@ class CollectionStore {
   }
 
   async getAllFolders(): Promise<Folder[]> {
-    const store = this.getStore(FOLDERS_STORE, "readonly");
-    return new Promise((resolve, reject) => {
-      const request = store.index("sortOrder").getAll();
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
+    const rows = await this.db!.all("SELECT * FROM folders ORDER BY sortOrder");
+    return rows.map(folderFromRow);
   }
 
   async getFolder(id: string): Promise<Folder | undefined> {
-    const store = this.getStore(FOLDERS_STORE, "readonly");
-    return new Promise((resolve, reject) => {
-      const request = store.get(id);
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
+    const row = await this.db!.get("SELECT * FROM folders WHERE id = ?", id);
+    return row ? folderFromRow(row) : undefined;
   }
 
   async createFolder(name: string, color = "#0f3460"): Promise<Folder> {
@@ -143,12 +208,14 @@ class CollectionStore {
   }
 
   async putFolder(folder: Folder): Promise<void> {
-    const store = this.getStore(FOLDERS_STORE, "readwrite");
-    return new Promise((resolve, reject) => {
-      const request = store.put(folder);
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
-    });
+    await this.db!.run(
+      `INSERT INTO folders (${FOLDER_COLUMNS})
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         name = excluded.name, color = excluded.color, sortOrder = excluded.sortOrder,
+         createdAt = excluded.createdAt, isDefault = excluded.isDefault`,
+      ...folderValues(folder),
+    );
   }
 
   async deleteFolder(id: string): Promise<void> {
@@ -166,12 +233,7 @@ class CollectionStore {
       await this.putCard(card);
     }
 
-    const store = this.getStore(FOLDERS_STORE, "readwrite");
-    return new Promise((resolve, reject) => {
-      const request = store.delete(id);
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
-    });
+    await this.db!.run("DELETE FROM folders WHERE id = ?", id);
   }
 
   async renameFolder(id: string, newName: string): Promise<void> {
@@ -195,47 +257,35 @@ class CollectionStore {
   }
 
   async getFolderCardCount(folderId: string): Promise<number> {
-    const store = this.getStore(CARDS_STORE, "readonly");
-    return new Promise((resolve, reject) => {
-      const index = store.index("folderId");
-      const request = index.count(IDBKeyRange.only(folderId));
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
+    const row = await this.db!.get(
+      "SELECT COUNT(*) as count FROM cards WHERE folderId = ?",
+      folderId,
+    );
+    return (row?.count as number) ?? 0;
   }
 
   // ─── Card Operations ────────────────────────────────────────────────
 
   async getCardsByFolder(folderId: string): Promise<CardEntry[]> {
-    const store = this.getStore(CARDS_STORE, "readonly");
-    return new Promise((resolve, reject) => {
-      const index = store.index("folderId");
-      const request = index.getAll(IDBKeyRange.only(folderId));
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
+    const rows = await this.db!.all("SELECT * FROM cards WHERE folderId = ?", folderId);
+    return rows.map(cardFromRow);
   }
 
   async getCard(id: string): Promise<CardEntry | undefined> {
-    const store = this.getStore(CARDS_STORE, "readonly");
-    return new Promise((resolve, reject) => {
-      const request = store.get(id);
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
+    const row = await this.db!.get("SELECT * FROM cards WHERE id = ?", id);
+    return row ? cardFromRow(row) : undefined;
   }
 
   /**
    * Find a card in a specific folder by its Scryfall ID (exact printing match).
    */
   async findCardInFolder(folderId: string, scryfallId: string): Promise<CardEntry | undefined> {
-    const store = this.getStore(CARDS_STORE, "readonly");
-    return new Promise((resolve, reject) => {
-      const index = store.index("folderId_scryfallId");
-      const request = index.get([folderId, scryfallId]);
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
+    const row = await this.db!.get(
+      "SELECT * FROM cards WHERE folderId = ? AND scryfallId = ?",
+      folderId,
+      scryfallId,
+    );
+    return row ? cardFromRow(row) : undefined;
   }
 
   /**
@@ -276,21 +326,21 @@ class CollectionStore {
   }
 
   async putCard(card: CardEntry): Promise<void> {
-    const store = this.getStore(CARDS_STORE, "readwrite");
-    return new Promise((resolve, reject) => {
-      const request = store.put(card);
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
-    });
+    await this.db!.run(
+      `INSERT INTO cards (${CARD_COLUMNS})
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         folderId = excluded.folderId, scryfallId = excluded.scryfallId,
+         illustrationId = excluded.illustrationId, oracleId = excluded.oracleId,
+         name = excluded.name, setCode = excluded.setCode, setName = excluded.setName,
+         collectorNumber = excluded.collectorNumber, quantity = excluded.quantity,
+         condition = excluded.condition, notes = excluded.notes, dateAdded = excluded.dateAdded`,
+      ...cardValues(card),
+    );
   }
 
   async deleteCard(id: string): Promise<void> {
-    const store = this.getStore(CARDS_STORE, "readwrite");
-    return new Promise((resolve, reject) => {
-      const request = store.delete(id);
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
-    });
+    await this.db!.run("DELETE FROM cards WHERE id = ?", id);
   }
 
   /**
@@ -368,20 +418,16 @@ class CollectionStore {
    * Get all cards across all folders.
    */
   async getAllCards(): Promise<CardEntry[]> {
-    const store = this.getStore(CARDS_STORE, "readonly");
-    return new Promise((resolve, reject) => {
-      const request = store.getAll();
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
+    const rows = await this.db!.all("SELECT * FROM cards");
+    return rows.map(cardFromRow);
   }
 
   /**
    * Get total card count (sum of quantities).
    */
   async getTotalCardCount(): Promise<number> {
-    const cards = await this.getAllCards();
-    return cards.reduce((sum, c) => sum + c.quantity, 0);
+    const row = await this.db!.get("SELECT COALESCE(SUM(quantity), 0) as total FROM cards");
+    return (row?.total as number) ?? 0;
   }
 
   // ─── Export / Import ────────────────────────────────────────────────
@@ -393,40 +439,31 @@ class CollectionStore {
   }
 
   async importCollection(data: { folders: Folder[]; cards: CardEntry[] }): Promise<void> {
-    // Clear existing data
-    await this.clearAll();
+    const txn = this.db!.transactionAsync(async (tx: Transaction) => {
+      await tx.exec("DELETE FROM cards; DELETE FROM folders;");
 
-    // Import folders
-    for (const folder of data.folders) {
-      await this.putFolder(folder);
-    }
+      for (const folder of data.folders) {
+        await tx.run(
+          `INSERT INTO folders (${FOLDER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?)`,
+          ...folderValues(folder),
+        );
+      }
 
-    // Import cards
-    for (const card of data.cards) {
-      await this.putCard(card);
-    }
-  }
-
-  private async clearAll(): Promise<void> {
-    const tx = this.db!.transaction([FOLDERS_STORE, CARDS_STORE], "readwrite");
-    tx.objectStore(FOLDERS_STORE).clear();
-    tx.objectStore(CARDS_STORE).clear();
-    await new Promise<void>((resolve, reject) => {
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
+      for (const card of data.cards) {
+        await tx.run(
+          `INSERT INTO cards (${CARD_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ...cardValues(card),
+        );
+      }
     });
+    await txn();
   }
 
   // ─── Helpers ────────────────────────────────────────────────────────
 
-  private getStore(name: string, mode: IDBTransactionMode): IDBObjectStore {
-    if (!this.db) throw new Error("Database not open");
-    return this.db.transaction(name, mode).objectStore(name);
-  }
-
-  close(): void {
+  async close(): Promise<void> {
     if (this.db) {
-      this.db.close();
+      await this.db.close();
       this.db = null;
     }
   }
