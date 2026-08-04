@@ -347,6 +347,34 @@ html, body {
   font-size: 0.9rem;
 }
 
+.card-qty-stepper {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.card-qty-stepper .btn-sm {
+  padding: 0.1rem 0.5rem;
+  line-height: 1;
+}
+
+.card-qty-stepper [data-action="dec"] {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.card-qty-stepper [data-action="inc"] {
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.btn-delete {
+  padding: 0.1rem 0.5rem;
+  line-height: 1;
+  font-size: 1rem;
+  color: red
+}
+
 .card-condition {
   font-size: 0.7rem;
   padding: 0.2rem 0.4rem;
@@ -499,60 +527,6 @@ html, body {
   gap: 0.5rem;
 }
 
-/* Scan-to-Select overlay */
-.scan-select-overlay {
-  position: absolute;
-  inset: 0;
-  background: var(--bg-primary);
-  z-index: 100;
-  display: flex;
-  flex-direction: column;
-}
-
-.scan-select-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.75rem 1rem;
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
-}
-
-.scan-select-header span {
-  font-size: 0.85rem;
-  color: var(--text-secondary);
-}
-
-.scan-select-camera {
-  flex: 1;
-  position: relative;
-  overflow: hidden;
-  background: #000;
-}
-
-.scan-select-camera video {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.scan-select-results {
-  max-height: 150px;
-  overflow-y: auto;
-  padding: 0.5rem;
-  background: var(--bg-secondary);
-  border-top: 1px solid var(--border);
-}
-
-.scan-match-result {
-  padding: 0.4rem 0.75rem;
-  margin-bottom: 0.25rem;
-  background: var(--bg-card);
-  border-radius: var(--radius);
-  font-size: 0.8rem;
-  color: var(--success);
-}
-
 /* Active button state */
 .btn-sm.active {
   background: var(--accent);
@@ -630,4 +604,34 @@ html, body {
     opacity: 1;
     transform: scale(1);
   }
+}
+
+/* Move-to-folder dialog */
+#move-dialog {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+  min-width: 220px;
+}
+
+#move-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.5);
+}
+
+#move-folder-select {
+  width: 100%;
+  padding: 0.5rem;
+  margin-bottom: 1rem;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.move-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
 }
