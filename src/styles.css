@@ -472,6 +472,54 @@ html, body {
   padding: 0.5rem;
 }
 
+.staging-empty {
+  text-align: center;
+  color: var(--text-secondary);
+  padding: 2rem 1rem;
+}
+
+.staging-search {
+  position: relative;
+  padding: 0.75rem 1rem;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+}
+
+.staging-search-input {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: inherit;
+}
+
+.staging-search-results {
+  position: absolute;
+  left: 1rem;
+  right: 1rem;
+  top: calc(100% - 0.25rem);
+  z-index: 10;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  list-style: none;
+}
+
+.staging-search-result {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+}
+
+.staging-search-result:hover {
+  background: var(--bg-secondary);
+}
+
 .staged-card {
   display: flex;
   align-items: center;

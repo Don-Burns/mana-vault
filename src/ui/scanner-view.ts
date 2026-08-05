@@ -2,29 +2,15 @@ import { Camera } from "../camera/capture.ts";
 import { CardDetector, DetectionResult } from "../detection/detector.ts";
 import { type StagedCard, StagingList } from "../collection/staging.ts";
 import { type CardEntry, collectionStore } from "../collection/store.ts";
+import {
+  type CardMetadata,
+  defaultPrintingFor,
+  searchCards,
+} from "../collection/card-search.ts";
 import { ScanDedupTracker } from "./scan-dedup.ts";
 import { openMergeView } from "./merge-view.ts";
 
 type ScanMode = "add" | "remove" | "move";
-
-// Metadata type matching what build-hashdb.ts generates
-interface CardMetadata {
-  illustrations: Record<string, {
-    oracle_id: string;
-    name: string;
-    cmc: number;
-    colors: string[];
-    printings: {
-      id: string;
-      set: string;
-      set_name: string;
-      collector_number: string;
-      lang: string;
-      released_at: string;
-      rarity: string;
-    }[];
-  }>;
-}
 
 export function ScannerView(container: HTMLElement) {
   const el = document.createElement("div");
@@ -99,7 +85,7 @@ export function ScannerView(container: HTMLElement) {
       </div>
       <button class="capture-btn" id="capture-btn" title="Capture" disabled></button>
       <div class="scanner-controls-right">
-        <button class="btn-sm btn-staging" id="btn-staging" disabled>
+        <button class="btn-sm btn-staging" id="btn-staging" enabled>
           Staged: <span id="staging-count">0</span>
         </button>
       </div>
@@ -188,7 +174,7 @@ export function ScannerView(container: HTMLElement) {
     staging.onChange(() => {
       const countEl = el.querySelector<HTMLElement>("#staging-count")!;
       countEl.textContent = staging.totalQuantity.toString();
-      stagingBtn.disabled = staging.count === 0;
+      // Always enabled: staging review is also where cards are added manually.
     });
 
     statusEl.textContent = "Initialization complete";
@@ -309,10 +295,7 @@ export function ScannerView(container: HTMLElement) {
     }
 
     // Use the most recent English printing as default
-    const defaultPrinting = illustration.printings
-      .filter((p) => p.lang === "en")
-      .sort((a, b) => b.released_at.localeCompare(a.released_at))[0] ||
-      illustration.printings[0];
+    const defaultPrinting = defaultPrintingFor(illustration);
 
     // Same physical card still sitting in view: skip re-adding unless the
     // view has been empty for a bit (card removed and re-shown = fresh scan).
@@ -333,28 +316,12 @@ export function ScannerView(container: HTMLElement) {
     }
 
     // Add to staging
-    staging.add({
-      illustrationId: bestMatch.illustrationId,
-      scryfallId: defaultPrinting.id,
-      oracleId: illustration.oracle_id,
-      name: illustration.name,
-      setCode: defaultPrinting.set,
-      setName: defaultPrinting.set_name,
-      collectorNumber: defaultPrinting.collector_number,
-      quantity: 1,
-      condition: "NM",
-      confidence: bestMatch.confidence,
-      cmc: illustration.cmc,
-      colors: illustration.colors,
-      rarity: defaultPrinting.rarity,
-      alternativePrintings: illustration.printings.map((p) => ({
-        scryfallId: p.id,
-        setCode: p.set,
-        setName: p.set_name,
-        collectorNumber: p.collector_number,
-        lang: p.lang,
-      })),
-    });
+    addIllustrationToStaging(
+      bestMatch.illustrationId,
+      illustration,
+      defaultPrinting,
+      bestMatch.confidence,
+    );
     dedup.recordCapture();
 
     statusEl.style.color = "";
@@ -368,6 +335,37 @@ export function ScannerView(container: HTMLElement) {
     setTimeout(() => {
       statusEl.textContent = "Ready - point at a card";
     }, 2000);
+  }
+
+  /** Add a matched illustration+printing to staging (used by scan capture and manual search-add). */
+  function addIllustrationToStaging(
+    illustrationId: string,
+    illustration: CardMetadata["illustrations"][string],
+    printing: CardMetadata["illustrations"][string]["printings"][number],
+    confidence: number,
+  ) {
+    staging.add({
+      illustrationId,
+      scryfallId: printing.id,
+      oracleId: illustration.oracle_id,
+      name: illustration.name,
+      setCode: printing.set,
+      setName: printing.set_name,
+      collectorNumber: printing.collector_number,
+      quantity: 1,
+      condition: "NM",
+      confidence,
+      cmc: illustration.cmc,
+      colors: illustration.colors,
+      rarity: printing.rarity,
+      alternativePrintings: illustration.printings.map((p) => ({
+        scryfallId: p.id,
+        setCode: p.set,
+        setName: p.set_name,
+        collectorNumber: p.collector_number,
+        lang: p.lang,
+      })),
+    });
   }
 
   function handleManualCapture() {
@@ -385,7 +383,6 @@ export function ScannerView(container: HTMLElement) {
   function showStagingReview() {
     // Replace main content with staging review
     const items = staging.getAll();
-    if (items.length === 0) return;
 
     const confirmDisabled = mode === "move"
       ? !destinationFolderId || !secondaryFolderId ||
@@ -403,13 +400,22 @@ export function ScannerView(container: HTMLElement) {
           <h2>Review Scanned Cards (${staging.totalQuantity})</h2>
           <button class="btn-sm" id="btn-close-staging">Close</button>
         </div>
+        <div class="staging-search">
+          <input type="text" id="staging-search-input" class="staging-search-input"
+            placeholder="Search card name to add manually..." autocomplete="off" />
+          <ul class="staging-search-results hidden" id="staging-search-results"></ul>
+        </div>
         <div class="staging-list">
-          ${items.map((item) => renderStagedCard(item)).join("")}
+          ${
+      items.length > 0
+        ? items.map((item) => renderStagedCard(item)).join("")
+        : `<p class="staging-empty">No cards staged yet.</p>`
+    }
         </div>
         <div class="staging-actions">
           <button class="btn-sm" id="btn-clear-staging">Clear All</button>
           <button class="btn-primary" id="btn-confirm-staging" ${
-      confirmDisabled ? "disabled" : ""
+      confirmDisabled || items.length === 0 ? "disabled" : ""
     }>
             ${confirmLabel}
           </button>
@@ -476,6 +482,59 @@ export function ScannerView(container: HTMLElement) {
         header.textContent = `Review Scanned Cards (${staging.totalQuantity})`;
       });
     });
+
+    // Manual search-to-add
+    const searchInput = overlay.querySelector<HTMLInputElement>(
+      "#staging-search-input",
+    )!;
+    const resultsEl = overlay.querySelector<HTMLElement>(
+      "#staging-search-results",
+    )!;
+
+    searchInput.addEventListener("input", () => {
+      if (!metadata) return;
+      const matches = searchCards(metadata, searchInput.value);
+      if (matches.length === 0) {
+        resultsEl.classList.add("hidden");
+        resultsEl.innerHTML = "";
+        return;
+      }
+      resultsEl.innerHTML = matches.map((m) => {
+        const printing = defaultPrintingFor(m);
+        return `
+          <li class="staging-search-result" data-illustration-id="${m.illustrationId}">
+            <span class="card-name">${escapeHtml(m.name)}</span>
+            <span class="card-set">${printing.set.toUpperCase()} #${printing.collector_number}</span>
+          </li>
+        `;
+      }).join("");
+      resultsEl.classList.remove("hidden");
+
+      resultsEl.querySelectorAll<HTMLElement>(".staging-search-result")
+        .forEach((li) => {
+          li.addEventListener("click", () => {
+            const illustrationId = li.dataset.illustrationId!;
+            const illustration = metadata!.illustrations[illustrationId];
+            addIllustrationToStaging(
+              illustrationId,
+              illustration,
+              defaultPrintingFor(illustration),
+              100,
+            );
+            overlay.remove();
+            showStagingReview();
+          });
+        });
+    });
+
+    // Click outside results closes the dropdown
+    overlay.addEventListener("click", (e) => {
+      if (
+        e.target !== searchInput && !resultsEl.contains(e.target as Node)
+      ) {
+        resultsEl.classList.add("hidden");
+      }
+    });
   }
 
   function renderStagedCard(item: StagedCard): string {
@@ -505,7 +564,10 @@ export function ScannerView(container: HTMLElement) {
     folderId: string,
     item: StagedCard,
   ): Promise<CardEntry | undefined> {
-    return (await collectionStore.findCardInFolder(folderId, item.scryfallId)) ??
+    return (await collectionStore.findCardInFolder(
+      folderId,
+      item.scryfallId,
+    )) ??
       (await collectionStore.findCardInFolderByIllustration(
         folderId,
         item.illustrationId,
@@ -526,7 +588,10 @@ export function ScannerView(container: HTMLElement) {
   }
 
   /** Simulate applying an Add of `items` onto `cards` (for merge-view preview). */
-  function simulateAdd(cards: CardEntry[], items: readonly StagedCard[]): CardEntry[] {
+  function simulateAdd(
+    cards: CardEntry[],
+    items: readonly StagedCard[],
+  ): CardEntry[] {
     const result = cards.map((c) => ({ ...c }));
     for (const item of items) {
       const existing = result.find((c) => c.scryfallId === item.scryfallId);
@@ -561,7 +626,10 @@ export function ScannerView(container: HTMLElement) {
    * preview). Cards that would drop to 0 are dropped entirely, matching
    * `computeDiff`'s "removed" semantics.
    */
-  function simulateRemove(cards: CardEntry[], items: readonly StagedCard[]): CardEntry[] {
+  function simulateRemove(
+    cards: CardEntry[],
+    items: readonly StagedCard[],
+  ): CardEntry[] {
     const result = cards.map((c) => ({ ...c }));
     for (const item of items) {
       const entry = resolveFromList(result, item);
@@ -578,24 +646,38 @@ export function ScannerView(container: HTMLElement) {
     const items = staging.getAll();
 
     if (mode === "add") {
-      const destCards = await collectionStore.getCardsByFolder(destinationFolderId);
+      const destCards = await collectionStore.getCardsByFolder(
+        destinationFolderId,
+      );
       openMergeView({
         container: el,
         stagingCards: items as StagedCard[],
         panels: [
-          { title: "Destination", before: destCards, after: simulateAdd(destCards, items) },
+          {
+            title: "Destination",
+            before: destCards,
+            after: simulateAdd(destCards, items),
+          },
         ],
         confirmLabel: "Add to Collection",
         onConfirm: () => commitStaging(),
       });
     } else if (mode === "remove") {
-      const destCards = await collectionStore.getCardsByFolder(destinationFolderId);
-      const skipped = items.filter((item) => !resolveFromList(destCards, item)).length;
+      const destCards = await collectionStore.getCardsByFolder(
+        destinationFolderId,
+      );
+      const skipped = items.filter((item) =>
+        !resolveFromList(destCards, item)
+      ).length;
       openMergeView({
         container: el,
         stagingCards: items as StagedCard[],
         panels: [
-          { title: "Source", before: destCards, after: simulateRemove(destCards, items) },
+          {
+            title: "Source",
+            before: destCards,
+            after: simulateRemove(destCards, items),
+          },
         ],
         skippedCount: skipped,
         confirmLabel: "Remove from Collection",
@@ -603,15 +685,29 @@ export function ScannerView(container: HTMLElement) {
       });
     } else {
       // move
-      const sourceCards = await collectionStore.getCardsByFolder(destinationFolderId);
-      const destCards = await collectionStore.getCardsByFolder(secondaryFolderId!);
-      const skipped = items.filter((item) => !resolveFromList(sourceCards, item)).length;
+      const sourceCards = await collectionStore.getCardsByFolder(
+        destinationFolderId,
+      );
+      const destCards = await collectionStore.getCardsByFolder(
+        secondaryFolderId!,
+      );
+      const skipped = items.filter((item) =>
+        !resolveFromList(sourceCards, item)
+      ).length;
       openMergeView({
         container: el,
         stagingCards: items as StagedCard[],
         panels: [
-          { title: "Source", before: sourceCards, after: simulateRemove(sourceCards, items) },
-          { title: "Destination", before: destCards, after: simulateAdd(destCards, items) },
+          {
+            title: "Source",
+            before: sourceCards,
+            after: simulateRemove(sourceCards, items),
+          },
+          {
+            title: "Destination",
+            before: destCards,
+            after: simulateAdd(destCards, items),
+          },
         ],
         skippedCount: skipped,
         confirmLabel: "Move to Collection",
@@ -646,7 +742,8 @@ export function ScannerView(container: HTMLElement) {
           rarity: item.rarity,
         });
       }
-      statusEl.textContent = `Added ${staging.totalQuantity} card(s) to collection!`;
+      statusEl.textContent =
+        `Added ${staging.totalQuantity} card(s) to collection!`;
     } else if (mode === "remove") {
       for (const item of items) {
         const entry = await resolveEntry(destinationFolderId, item);
