@@ -8,7 +8,11 @@
  * ordering control so rows line up across panels.
  */
 
-import { type DiffableCard, computeDiff, type DiffRow } from "../collection/diff.ts";
+import {
+  computeDiff,
+  type DiffableCard,
+  type DiffRow,
+} from "../collection/diff.ts";
 import {
   compareCards,
   DEFAULT_SORT_CRITERIA,
@@ -54,6 +58,7 @@ export function openMergeView(options: MergeViewOptions): void {
   // Check order = priority order; unchecking then rechecking a field
   // re-appends it at the end rather than restoring its old position.
   let criteria: SortCriterion[] = DEFAULT_SORT_CRITERIA.map((c) => ({ ...c }));
+  let hideContext = false;
 
   const overlay = document.createElement("div");
   overlay.className = "merge-view-overlay";
@@ -67,11 +72,23 @@ export function openMergeView(options: MergeViewOptions): void {
           <h2>Review Changes</h2>
           <button class="btn-sm" id="merge-cancel">Cancel</button>
         </div>
-        <div class="merge-sort-controls">
-          ${SORT_FIELDS.map((f) => renderSortFieldRow(f, criteria)).join("")}
+        <div class="merge-viewer-controls">
+          <div class="merge-sort-controls">
+            ${SORT_FIELDS.map((f) => renderSortFieldRow(f, criteria)).join("")}
+          </div>
+          <div class="merge-hide-context-controls">
+            <label class="merge-sort-field">
+              <input type="checkbox" id="merge-hide-context" ${
+      hideContext ? "checked" : ""
+    }>
+              <span>Hide context cards</span>
+            </label>
+          </div>
         </div>
         <div class="merge-view-panels">
-          ${renderPanels(options.stagingCards, options.panels, criteria)}
+          ${
+      renderPanels(options.stagingCards, options.panels, criteria, hideContext)
+    }
         </div>
         ${
       options.skippedCount
@@ -85,32 +102,45 @@ export function openMergeView(options: MergeViewOptions): void {
       </div>
     `;
 
-    overlay.querySelectorAll<HTMLInputElement>(".merge-sort-checkbox").forEach((cb) => {
-      cb.addEventListener("change", () => {
-        const method = cb.dataset.method as SortMethod;
-        if (cb.checked) {
-          criteria = [...criteria, { method, direction: "asc" }];
-        } else {
-          criteria = criteria.filter((c) => c.method !== method);
-        }
+    overlay.querySelectorAll<HTMLInputElement>(".merge-sort-checkbox").forEach(
+      (cb) => {
+        cb.addEventListener("change", () => {
+          const method = cb.dataset.method as SortMethod;
+          if (cb.checked) {
+            criteria = [...criteria, { method, direction: "asc" }];
+          } else {
+            criteria = criteria.filter((c) => c.method !== method);
+          }
+          render();
+        });
+      },
+    );
+    overlay.querySelectorAll<HTMLButtonElement>(".merge-sort-direction")
+      .forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const method = btn.dataset.method as SortMethod;
+          criteria = criteria.map((c) =>
+            c.method === method
+              ? { ...c, direction: c.direction === "asc" ? "desc" : "asc" }
+              : c
+          );
+          render();
+        });
+      });
+    overlay.querySelector<HTMLInputElement>("#merge-hide-context")!
+      .addEventListener("change", (e) => {
+        hideContext = (e.target as HTMLInputElement).checked;
         render();
       });
-    });
-    overlay.querySelectorAll<HTMLButtonElement>(".merge-sort-direction").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const method = btn.dataset.method as SortMethod;
-        criteria = criteria.map((c) =>
-          c.method === method ? { ...c, direction: c.direction === "asc" ? "desc" : "asc" } : c
-        );
-        render();
-      });
-    });
     overlay.querySelector("#merge-cancel")!.addEventListener("click", cancel);
     overlay.querySelector("#merge-cancel-2")!.addEventListener("click", cancel);
-    overlay.querySelector("#merge-confirm")!.addEventListener("click", async () => {
-      await options.onConfirm();
-      overlay.remove();
-    });
+    overlay.querySelector("#merge-confirm")!.addEventListener(
+      "click",
+      async () => {
+        await options.onConfirm();
+        overlay.remove();
+      },
+    );
 
     syncPanelScroll(overlay);
   }
@@ -127,7 +157,9 @@ export function openMergeView(options: MergeViewOptions): void {
  * matching rows aligned as any one of them scrolls.
  */
 function syncPanelScroll(overlay: HTMLElement): void {
-  const panels = [...overlay.querySelectorAll<HTMLElement>(".merge-panel-rows")];
+  const panels = [
+    ...overlay.querySelectorAll<HTMLElement>(".merge-panel-rows"),
+  ];
   let syncing = false;
   for (const panel of panels) {
     panel.addEventListener("scroll", () => {
@@ -147,7 +179,9 @@ function renderSortFieldRow(
 ): string {
   const index = criteria.findIndex((c) => c.method === field.value);
   const active = index !== -1;
-  const priorityBadge = active ? `<span class="merge-sort-priority">${index + 1}</span>` : "";
+  const priorityBadge = active
+    ? `<span class="merge-sort-priority">${index + 1}</span>`
+    : "";
   const directionBtn = active
     ? `<button type="button" class="btn-sm merge-sort-direction" data-method="${field.value}">${
       criteria[index].direction === "asc" ? "\u2191 asc" : "\u2193 desc"
@@ -182,15 +216,28 @@ export function buildMergeSlots(
   stagingCards: MergeCard[],
   panels: MergePanel[],
   criteria: SortCriterion[],
-): { slots: MergeSlot[]; masterKeys: string[]; panelRowsByKey: Map<string, DiffRow<MergeCard>>[] } {
+  hideContext = false,
+): {
+  slots: MergeSlot[];
+  masterKeys: string[];
+  panelRowsByKey: Map<string, DiffRow<MergeCard>>[];
+} {
   const stagingByKey = new Map(stagingCards.map((c) => [c.scryfallId, c]));
-  const panelRows = panels.map((panel) => computeDiff(panel.before, panel.after));
-  const panelRowsByKey = panelRows.map((rows) => new Map(rows.map((r) => [r.card.scryfallId, r])));
+  const panelRows = panels.map((panel) =>
+    computeDiff(panel.before, panel.after)
+  );
+  const panelRowsByKey = panelRows.map((rows) =>
+    new Map(rows.map((r) => [r.card.scryfallId, r]))
+  );
 
   const masterCards = new Map<string, MergeCard>();
   for (const c of stagingCards) masterCards.set(c.scryfallId, c);
-  for (const rows of panelRows) for (const r of rows) {
-    if (!masterCards.has(r.card.scryfallId)) masterCards.set(r.card.scryfallId, r.card);
+  for (const rows of panelRows) {
+    for (const r of rows) {
+      if (!masterCards.has(r.card.scryfallId)) {
+        masterCards.set(r.card.scryfallId, r.card);
+      }
+    }
   }
   const masterKeys = [...masterCards.values()]
     .sort(compareCards<MergeCard>(criteria))
@@ -204,7 +251,9 @@ export function buildMergeSlots(
       .map((key, i) => ({ i, has: byKey.has(key) }))
       .filter((x) => x.has)
       .map((x) => x.i);
-    const changed = indicesWithRow.filter((i) => byKey.get(masterKeys[i])!.kind !== "unchanged");
+    const changed = indicesWithRow.filter((i) =>
+      byKey.get(masterKeys[i])!.kind !== "unchanged"
+    );
     const keep = new Set<number>();
     for (const ci of changed) {
       const pos = indicesWithRow.indexOf(ci);
@@ -217,7 +266,8 @@ export function buildMergeSlots(
   });
 
   const sharedKeep = (i: number) =>
-    stagingByKey.has(masterKeys[i]) || panelKeep.some((keep) => keep.has(i));
+    stagingByKey.has(masterKeys[i]) ||
+    (!hideContext && panelKeep.some((keep) => keep.has(i)));
 
   const slots: MergeSlot[] = [];
   let i = 0;
@@ -228,7 +278,7 @@ export function buildMergeSlots(
       continue;
     }
     while (i < masterKeys.length && !sharedKeep(i)) i++;
-    slots.push({ type: "ellipsis" });
+    if (!hideContext) slots.push({ type: "ellipsis" });
   }
 
   return { slots, masterKeys, panelRowsByKey };
@@ -243,9 +293,15 @@ function renderPanels(
   stagingCards: MergeCard[],
   panels: MergePanel[],
   criteria: SortCriterion[],
+  hideContext: boolean,
 ): string {
   const stagingByKey = new Map(stagingCards.map((c) => [c.scryfallId, c]));
-  const { slots, masterKeys, panelRowsByKey } = buildMergeSlots(stagingCards, panels, criteria);
+  const { slots, masterKeys, panelRowsByKey } = buildMergeSlots(
+    stagingCards,
+    panels,
+    criteria,
+    hideContext,
+  );
 
   const stagingHtml = slots.map((slot) => {
     if (slot.type === "ellipsis") return `<div class="merge-row-spacer"></div>`;
@@ -256,7 +312,9 @@ function renderPanels(
   const panelsHtml = panels.map((panel, p) => {
     const byKey = panelRowsByKey[p];
     const rowsHtml = slots.map((slot) => {
-      if (slot.type === "ellipsis") return `<div class="merge-row-ellipsis">&hellip;</div>`;
+      if (slot.type === "ellipsis") {
+        return `<div class="merge-row-ellipsis">&hellip;</div>`;
+      }
       const row = byKey.get(masterKeys[slot.index]);
       return row ? renderDiffRow(row) : `<div class="merge-row-spacer"></div>`;
     }).join("");

@@ -586,13 +586,24 @@ html, body {
   flex: 1;
 }
 
-.merge-sort-controls {
+.merge-viewer-controls {
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
   gap: 0.5rem;
   padding: 0.5rem 1rem;
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
+}
+
+.merge-sort-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  flex: 1;
+}
+
+.merge-hide-context-controls {
+  margin-left: auto;
 }
 
 .merge-sort-field {

@@ -63,3 +63,17 @@ Deno.test("buildMergeSlots: staging-only card keeps its row even if unchanged ev
   const rowKeys = slots.filter((s) => s.type === "row").map((s) => masterKeys[(s as { index: number }).index]);
   assertEquals(rowKeys.includes("z"), true);
 });
+
+Deno.test("buildMergeSlots: hideContext drops context rows, keeping only cards in staging", () => {
+  const staging = [card("a", "a", 5)];
+  const ids = ["a", "b", "c", "d", "e", "f", "g", "h", "i"];
+  const before = ids.map((id) => card(id, id, 1));
+  const after = ids.map((id) => id === "a" ? card(id, id, 5) : card(id, id, 1));
+  const panels: MergePanel[] = [{ title: "Folder", before, after }];
+
+  const { slots, masterKeys } = buildMergeSlots(staging, panels, DEFAULT_SORT_CRITERIA, true);
+
+  const rowKeys = slots.filter((s) => s.type === "row").map((s) => masterKeys[(s as { index: number }).index]);
+  assertEquals(rowKeys, ["a"]); // b, c context rows dropped, only staging card "a" kept
+  assertEquals(slots.some((s) => s.type === "ellipsis"), false); // no "..." placeholder either
+});
