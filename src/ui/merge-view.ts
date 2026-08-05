@@ -17,7 +17,7 @@ import {
   type SortMethod,
 } from "../collection/sort.ts";
 
-type MergeCard = SortableCard & DiffableCard;
+export type MergeCard = SortableCard & DiffableCard;
 
 export interface MergePanel {
   title: string;
@@ -71,15 +71,7 @@ export function openMergeView(options: MergeViewOptions): void {
           ${SORT_FIELDS.map((f) => renderSortFieldRow(f, criteria)).join("")}
         </div>
         <div class="merge-view-panels">
-          <div class="merge-panel">
-            <h3>Staging</h3>
-            <div class="merge-panel-rows">
-              ${
-      [...options.stagingCards].sort(compareCards(criteria)).map(renderPlainRow).join("")
-    }
-            </div>
-          </div>
-          ${options.panels.map((panel) => renderDiffPanel(panel, criteria)).join("")}
+          ${renderPanels(options.stagingCards, options.panels, criteria)}
         </div>
         ${
       options.skippedCount
@@ -119,11 +111,33 @@ export function openMergeView(options: MergeViewOptions): void {
       await options.onConfirm();
       overlay.remove();
     });
+
+    syncPanelScroll(overlay);
   }
 
   function cancel() {
     options.onCancel?.();
     overlay.remove();
+  }
+}
+
+/**
+ * Rows share the same fixed height and slot order across every column (see
+ * `buildMergeSlots`), so mirroring raw `scrollTop` between panels keeps
+ * matching rows aligned as any one of them scrolls.
+ */
+function syncPanelScroll(overlay: HTMLElement): void {
+  const panels = [...overlay.querySelectorAll<HTMLElement>(".merge-panel-rows")];
+  let syncing = false;
+  for (const panel of panels) {
+    panel.addEventListener("scroll", () => {
+      if (syncing) return;
+      syncing = true;
+      for (const other of panels) {
+        if (other !== panel) other.scrollTop = panel.scrollTop;
+      }
+      syncing = false;
+    });
   }
 }
 
@@ -151,16 +165,115 @@ function renderSortFieldRow(
   `;
 }
 
-function renderDiffPanel(panel: MergePanel, criteria: SortCriterion[]): string {
-  const rows = computeDiff(panel.before, panel.after)
-    .sort((a, b) => compareCards<MergeCard>(criteria)(a.card, b.card));
+/** How many unchanged neighbor rows to keep on each side of a change in a target panel. */
+export const CONTEXT_SIZE = 2;
+
+export type MergeSlot = { type: "row"; index: number } | { type: "ellipsis" };
+
+/**
+ * Builds a single shared row order (keyed by scryfallId, sorted by
+ * `criteria`) for the staging list and all target panels, so a card's row
+ * lands at the same slot index in every column. A master index collapses
+ * into a shared "..." slot only if no column needs it: it's absent from
+ * staging, and in every panel it's either missing or unchanged and further
+ * than CONTEXT_SIZE rows (within that panel's own rows) from any change.
+ */
+export function buildMergeSlots(
+  stagingCards: MergeCard[],
+  panels: MergePanel[],
+  criteria: SortCriterion[],
+): { slots: MergeSlot[]; masterKeys: string[]; panelRowsByKey: Map<string, DiffRow<MergeCard>>[] } {
+  const stagingByKey = new Map(stagingCards.map((c) => [c.scryfallId, c]));
+  const panelRows = panels.map((panel) => computeDiff(panel.before, panel.after));
+  const panelRowsByKey = panelRows.map((rows) => new Map(rows.map((r) => [r.card.scryfallId, r])));
+
+  const masterCards = new Map<string, MergeCard>();
+  for (const c of stagingCards) masterCards.set(c.scryfallId, c);
+  for (const rows of panelRows) for (const r of rows) {
+    if (!masterCards.has(r.card.scryfallId)) masterCards.set(r.card.scryfallId, r.card);
+  }
+  const masterKeys = [...masterCards.values()]
+    .sort(compareCards<MergeCard>(criteria))
+    .map((c) => c.scryfallId);
+
+  // For each panel, find which master indices it wants to keep: any row it
+  // has that is changed, plus up to CONTEXT_SIZE neighbors it also has data
+  // for (skipping over master indices this panel has no data for).
+  const panelKeep = panelRowsByKey.map((byKey) => {
+    const indicesWithRow = masterKeys
+      .map((key, i) => ({ i, has: byKey.has(key) }))
+      .filter((x) => x.has)
+      .map((x) => x.i);
+    const changed = indicesWithRow.filter((i) => byKey.get(masterKeys[i])!.kind !== "unchanged");
+    const keep = new Set<number>();
+    for (const ci of changed) {
+      const pos = indicesWithRow.indexOf(ci);
+      for (let d = -CONTEXT_SIZE; d <= CONTEXT_SIZE; d++) {
+        const j = indicesWithRow[pos + d];
+        if (j !== undefined) keep.add(j);
+      }
+    }
+    return keep;
+  });
+
+  const sharedKeep = (i: number) =>
+    stagingByKey.has(masterKeys[i]) || panelKeep.some((keep) => keep.has(i));
+
+  const slots: MergeSlot[] = [];
+  let i = 0;
+  while (i < masterKeys.length) {
+    if (sharedKeep(i)) {
+      slots.push({ type: "row", index: i });
+      i++;
+      continue;
+    }
+    while (i < masterKeys.length && !sharedKeep(i)) i++;
+    slots.push({ type: "ellipsis" });
+  }
+
+  return { slots, masterKeys, panelRowsByKey };
+}
+
+/**
+ * Renders the staging column plus one column per target panel using the
+ * shared slot order from `buildMergeSlots`, so matching rows line up
+ * vertically and long unchanged runs collapse to a single "..." row.
+ */
+function renderPanels(
+  stagingCards: MergeCard[],
+  panels: MergePanel[],
+  criteria: SortCriterion[],
+): string {
+  const stagingByKey = new Map(stagingCards.map((c) => [c.scryfallId, c]));
+  const { slots, masterKeys, panelRowsByKey } = buildMergeSlots(stagingCards, panels, criteria);
+
+  const stagingHtml = slots.map((slot) => {
+    if (slot.type === "ellipsis") return `<div class="merge-row-spacer"></div>`;
+    const card = stagingByKey.get(masterKeys[slot.index]);
+    return card ? renderPlainRow(card) : `<div class="merge-row-spacer"></div>`;
+  }).join("");
+
+  const panelsHtml = panels.map((panel, p) => {
+    const byKey = panelRowsByKey[p];
+    const rowsHtml = slots.map((slot) => {
+      if (slot.type === "ellipsis") return `<div class="merge-row-ellipsis">&hellip;</div>`;
+      const row = byKey.get(masterKeys[slot.index]);
+      return row ? renderDiffRow(row) : `<div class="merge-row-spacer"></div>`;
+    }).join("");
+    return `
+      <div class="merge-panel">
+        <h3>${escapeHtml(panel.title)}</h3>
+        <div class="merge-panel-rows">${rowsHtml}</div>
+      </div>
+    `;
+  }).join("");
+
   return `
     <div class="merge-panel">
-      <h3>${escapeHtml(panel.title)}</h3>
-      <div class="merge-panel-rows">
-        ${rows.map(renderDiffRow).join("")}
-      </div>
+      <h3>Staging</h3>
+      <div class="merge-panel-rows">${stagingHtml}</div>
     </div>
+    ${panelsHtml}
   `;
 }
 

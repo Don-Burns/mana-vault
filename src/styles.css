@@ -602,6 +602,14 @@ html, body {
   overflow-y: auto;
 }
 
+.merge-row,
+.merge-row-spacer,
+.merge-row-ellipsis {
+  height: 2.2rem;
+  box-sizing: border-box;
+  margin-bottom: 0.2rem;
+}
+
 .merge-row {
   display: flex;
   align-items: center;
@@ -610,7 +618,13 @@ html, body {
   padding: 0.5rem;
   background: var(--bg-card);
   border-radius: var(--radius);
-  margin-bottom: 0.2rem;
+}
+
+.merge-row-ellipsis {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
 }
 
 .diff-row-added {

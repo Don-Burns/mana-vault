@@ -39,8 +39,13 @@ change first. It shows:
   changes highlight just the new number (green for increases, red for
   decreases); unchanged cards render plain, for context.
 - A single ordering control (name, set + collector number, quantity, mana
-  value, color, or rarity) that applies to every panel at once, so rows line
-  up across panels.
+  value, color, or rarity) that applies to every panel at once. Matching
+  cards are aligned to the same row position across the staging panel and
+  every target panel (not just the same sort order), and scrolling any panel
+  scrolls the others in sync.
+- Each target panel shows at most 2 unchanged cards of context on either
+  side of a change; longer unchanged runs collapse into a single "..." row
+  to keep panels compact.
 - Any scanned cards that couldn't be matched to a folder entry (Remove/Move)
   are called out with a skipped-count note.
 
