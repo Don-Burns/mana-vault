@@ -9,10 +9,13 @@
     "db:release": "deno task db:download && deno task db:art && deno task db:build && deno run -A tools/release-db.ts",
     "bench:matcher": "deno run -A docs/benchmarks/bench-matcher.ts",
     "opencv:download": "deno run -A tools/download-opencv.ts",
-    "test": "deno test -A"
+    "test": "deno test -A",
+    "test:e2e": "deno run -A npm:playwright test",
+    "test:e2e:install": "deno run -A npm:playwright install --with-deps chromium"
   },
   "nodeModulesDir": "auto",
   "imports": {
+    "@playwright/test": "npm:@playwright/test@1.62.1",
     "@std/assert": "jsr:@std/assert@1",
     "@tursodatabase/database": "npm:@tursodatabase/database@^0.7.2",
     "@tursodatabase/database-common": "npm:@tursodatabase/database-common@^0.7.2",

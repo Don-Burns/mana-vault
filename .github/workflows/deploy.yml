@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: "Skip the test suite (manual runs only — pushes to main always run tests)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -15,7 +20,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  test:
+    if: github.event.inputs.skip_tests != 'true'
+    uses: ./.github/workflows/test.yml
+
   build:
+    needs: test
+    # Runs if tests passed, or if they were legitimately skipped via the
+    # manual workflow_dispatch toggle above — never runs on a real failure.
+    if: always() && (needs.test.result == 'success' || needs.test.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

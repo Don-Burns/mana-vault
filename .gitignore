@@ -1,5 +1,9 @@
 # Build output
 dist/
+dist-root/
+dist-subpath/
+test-results/
+playwright-report/
 
 # Dependencies
 node_modules/

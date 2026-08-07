@@ -1,0 +1,72 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      # tests/card_detection_test.ts reads the hash DB straight from
+      # data/output/ (mirrors the local `deno task db:build` output), and
+      # data/ is gitignored (large, Scryfall-derived) — same release asset
+      # deploy.yml uses, just unpacked to a different directory.
+      - name: Download hash DB
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p data/output
+          gh release download db-latest --repo "$GITHUB_REPOSITORY" \
+            --pattern 'hash-db.bin' --pattern 'metadata.json' --pattern 'version.json' \
+            --dir data/output --clobber
+
+      - name: Unit tests
+        run: deno task test
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      # Same real, checked-in-release hash DB the production build uses, so
+      # e2e/scanner-match.spec.ts matches against real card data rather than
+      # a separate synthetic fixture.
+      - name: Download hash DB
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p public/db
+          gh release download db-latest --repo "$GITHUB_REPOSITORY" \
+            --pattern 'hash-db.bin' --pattern 'metadata.json' --pattern 'version.json' \
+            --dir public/db --clobber
+
+      - name: Download OpenCV.js
+        run: deno task opencv:download
+
+      - name: Install Playwright browser
+        run: deno task test:e2e:install
+
+      - name: E2E tests
+        run: deno task test:e2e
+        env:
+          CI: "true"
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
