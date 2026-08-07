@@ -50,8 +50,31 @@ class App {
   }
 }
 
+// The Turso WASM DB is a threaded build that needs SharedArrayBuffer, which
+// requires the page to be cross-origin isolated. GitHub Pages can't set the
+// COOP/COEP headers for that itself, so src/sw.ts injects them on every
+// same-origin response instead. Those headers only take effect on a
+// navigation the service worker actually controls — not the very first page
+// load before it's installed — so force one reload after the SW is ready.
+// sessionStorage guards against a reload loop if isolation still fails.
+async function ensureCrossOriginIsolated(): Promise<void> {
+  if (self.crossOriginIsolated || !("serviceWorker" in navigator)) return;
+  if (sessionStorage.getItem("coi-reload")) return;
+  await navigator.serviceWorker.ready;
+  sessionStorage.setItem("coi-reload", "1");
+  location.reload();
+}
+
 // Boot the app
 async function boot() {
+  await ensureCrossOriginIsolated();
+  if (!self.crossOriginIsolated && sessionStorage.getItem("coi-reload")) {
+    // Reload was already triggered on a previous pass (or isolation is
+    // unreachable, e.g. no SW support); don't try to open the threaded wasm
+    // DB in a non-isolated context, just bail out.
+    return;
+  }
+
   // Initialize the database
   await collectionStore.open();
   await collectionStore.ensureDefaultFolder();
