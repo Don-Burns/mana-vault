@@ -5,7 +5,7 @@ dist/
 node_modules/
 
 # Data directory (downloaded from Scryfall - large)
-data/
+/data/
 
 # Deno
 .deno/
