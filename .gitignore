@@ -16,7 +16,6 @@ public/db/metadata.json
 public/db/version.json
 
 # Vendored WASM binaries (downloaded via deno task opencv:download)
-vendor/opencv/opencv.mjs
 vendor/opencv/opencv.cjs
 
 # OS
