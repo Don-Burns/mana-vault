@@ -15,7 +15,7 @@ the app's offline-first behavior.
 
 ## Background (current architecture)
 - `src/collection/store.ts` — singleton `CollectionStore` (exported as
-  `collectionStore`) wraps IndexedDB (`mtg-scanner`, v1) with two object stores:
+  `collectionStore`) wraps IndexedDB (`mana-vault`, v1) with two object stores:
   - `folders` (keyPath `id`): indexes `sortOrder`, `name`.
   - `cards` (keyPath `id`): indexes `folderId`, `scryfallId`, `illustrationId`,
     `oracleId`, `name`, compound `[folderId, scryfallId]`.
@@ -72,7 +72,7 @@ the app's offline-first behavior.
 
 ### Phase 2 — Rewrite CollectionStore internals (`src/collection/store.ts`)
 - Replace the `IDBDatabase` field with a Turso connection
-  (`await connect("mtg-scanner.db")` in `open()`).
+  (`await connect("mana-vault.db")` in `open()`).
 - Define SQL schema mirroring the current stores/indexes:
   ```sql
   CREATE TABLE IF NOT EXISTS folders (

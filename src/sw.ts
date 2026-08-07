@@ -21,8 +21,8 @@ declare const self: ServiceWorkerGlobalScope & {
   __WB_MANIFEST: Array<{ url: string; revision: string | null }>;
 };
 
-const CACHE_NAME = "mtg-scanner-v1";
-const DB_CACHE_NAME = "mtg-scanner-db-v1";
+const CACHE_NAME = "mana-vault-v1";
+const DB_CACHE_NAME = "mana-vault-db-v1";
 
 // Base path the SW is scoped to ("/" at the root, "/mtg_scanner_js/" on a
 // GitHub Pages project site). Derived from the registration scope so this

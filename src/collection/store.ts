@@ -8,7 +8,7 @@
 import { connect } from "@tursodatabase/database-wasm/vite";
 import type { DatabasePromise as Database, Transaction } from "@tursodatabase/database-common";
 
-const DB_PATH = "mtg-scanner.db";
+const DB_PATH = "mana-vault.db";
 
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS folders (

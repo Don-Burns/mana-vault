@@ -1,7 +1,7 @@
 # Plan: Serve the PWA on GitHub Pages
 
 ## Goal
-Deploy the MTG Scanner PWA to GitHub Pages as a project site at
+Deploy Mana Vault to GitHub Pages as a project site at
 `https://<user>.github.io/mtg_scanner_js/`, fully offline-capable after first
 load (hash DB + metadata), with a path to add offline card art later.
 
@@ -109,7 +109,7 @@ Done, in priority order:
    `hash-db.bin`. Runtime code (`src/workers/db-version.ts`) fetches that
    marker first and appends `?v=<hash>` to the DB/metadata requests, so a
    rebuilt DB is a new cache key rather than stuck stale under the fixed
-   `mtg-scanner-db-v1` cache name. `src/sw.ts` excludes `version.json` itself
+   `mana-vault-db-v1` cache name. `src/sw.ts` excludes `version.json` itself
    from the `cacheFirst` route so the marker is always fetched fresh.
 
 `dist/` size is essentially unchanged by this phase (~28 MB) — the real win

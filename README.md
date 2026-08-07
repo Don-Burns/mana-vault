@@ -1,4 +1,4 @@
-# MTG Card Scanner PWA
+# Mana Vault
 
 A fully offline-capable Progressive Web App for scanning and managing Magic: The
 Gathering card collections. Uses computer vision (OpenCV.js) and perceptual

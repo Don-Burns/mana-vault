@@ -1,4 +1,4 @@
-# MTG Scanner JS
+# Mana Vault
 
 # List available recipes
 default:

@@ -1,7 +1,7 @@
 {
-  "name": "MTG Scanner",
-  "short_name": "MTG Scan",
-  "description": "Scan and manage your Magic: The Gathering card collection",
+  "name": "Mana Vault",
+  "short_name": "Mana Vault",
+  "description": "Mana Vault - Scan and manage your Magic: The Gathering card collection",
   "start_url": ".",
   "scope": ".",
   "display": "standalone",
