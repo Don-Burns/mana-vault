@@ -24,12 +24,17 @@ declare const self: ServiceWorkerGlobalScope & {
 const CACHE_NAME = "mtg-scanner-v1";
 const DB_CACHE_NAME = "mtg-scanner-db-v1";
 
+// Base path the SW is scoped to ("/" at the root, "/mtg_scanner_js/" on a
+// GitHub Pages project site). Derived from the registration scope so this
+// works under any base without a build-time constant.
+const BASE_PATH = new URL(self.registration.scope).pathname;
+
 // Static app shell entries always pre-cached on install.
 const APP_SHELL = [
-  "/",
-  "/index.html",
-  "/manifest.json",
-  "/icon.svg",
+  BASE_PATH,
+  `${BASE_PATH}index.html`,
+  `${BASE_PATH}manifest.json`,
+  `${BASE_PATH}icon.svg`,
 ];
 
 // Build-time precache manifest (hashed JS/CSS assets). Reference it here so
@@ -92,8 +97,16 @@ self.addEventListener("fetch", (event: FetchEvent) => {
     return;
   }
 
-  // Hash DB and metadata: cache-first (large, rarely changes)
-  if (url.pathname.startsWith("/db/")) {
+  // Hash DB and metadata: cache-first (large, rarely changes). The DB build
+  // stamps a content hash into version.json and the app requests these with
+  // a `?v=<hash>` query string (see fetchVersioned in the app code), so a
+  // rebuilt DB is a new cache key rather than silently stuck stale forever.
+  // version.json itself must always be fetched fresh — it's how the app
+  // discovers that a new hash exists.
+  if (
+    url.pathname.startsWith(`${BASE_PATH}db/`) &&
+    !url.pathname.endsWith("version.json")
+  ) {
     event.respondWith(cacheFirst(event.request, DB_CACHE_NAME));
     return;
   }

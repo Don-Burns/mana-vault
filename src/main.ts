@@ -69,3 +69,11 @@ if (document.readyState === "loading") {
 } else {
   boot();
 }
+
+// Release the OPFS sync access handle on reload/navigation/close — otherwise
+// it stays locked and the next load fails with "Access Handles cannot be
+// created if there is another open Access Handle" (also hit on every Vite
+// full-page reload in dev, since that's a real unload too).
+addEventListener("pagehide", () => {
+  collectionStore.close();
+});

@@ -9,6 +9,7 @@ import {
   importFromJSON,
 } from "../collection/export.ts";
 import { openMergeView } from "./merge-view.ts";
+import { localCardImageUrl } from "../collection/card-image.ts";
 export function CollectionView(container: HTMLElement) {
   const el = document.createElement("div");
   el.className = "view collection-view";
@@ -206,6 +207,9 @@ export function CollectionView(container: HTMLElement) {
       <div class="card-item ${
       isSelected ? "selected" : ""
     }" data-card-id="${card.id}">
+        <img class="card-thumb" src="${
+      localCardImageUrl(card.illustrationId)
+    }" alt="" loading="lazy" onerror="this.classList.add('card-thumb-blank');this.removeAttribute('src')" />
         <div class="card-info">
           <span class="card-name">${escapeHtml(card.name)}</span>
           <span class="card-set">${card.setCode.toUpperCase()} #${card.collectorNumber}</span>

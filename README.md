@@ -88,6 +88,7 @@ hashing to identify cards by their artwork — no internet required at scan time
 
 - OpenCV vendoring/runtime details: [docs/opencv_vendoring.md](docs/opencv_vendoring.md)
 - Turso (SQLite/WASM) collection store details: [docs/turso_collection_db.md](docs/turso_collection_db.md)
+- GitHub Pages deploy design: [docs/plans/github_pages_deploy.md](docs/plans/github_pages_deploy.md)
 
 ### System Overview
 
@@ -190,7 +191,8 @@ mtg_scanner_js/
 │   ├── icon.svg              # App icon
 │   └── db/                   # Generated hash database (gitignored)
 │       ├── hash-db.bin       # Binary perceptual hash database
-│       └── metadata.json     # Card metadata (illustration → printings)
+│       ├── metadata.json     # Card metadata (illustration → printings)
+│       └── version.json      # Content-hash marker for SW cache-busting
 │
 ├── src/
 │   ├── main.ts              # Boot sequence, view routing, SW registration
@@ -221,13 +223,19 @@ mtg_scanner_js/
 │   │   └── collection-view.ts  # Folders + cards + scan-to-select + move flow
 │   │
 │   └── workers/
-│       └── detection-worker.ts  # OpenCV.js processing (contour, warp, extract)
+│       ├── detection-worker.ts  # OpenCV.js processing (contour, warp, extract)
+│       ├── metadata-worker.ts   # Fetches + parses metadata.json off the main thread
+│       └── db-version.ts        # Cache-busting `?v=<hash>` DB/metadata URL helper
 │
 ├── tools/                    # Deno CLI tools for database generation
 │   ├── config.ts            # Shared paths, types, Scryfall config
-│   ├── download-bulk.ts     # Fetch Scryfall default_cards bulk JSON
+│   ├── download-bulk.ts     # Fetch Scryfall bulk JSON (unique_artwork)
 │   ├── download-art.ts      # Download art_crop images (rate-limited, resumable)
-│   └── build-hashdb.ts      # Compute hashes, generate binary DB + metadata
+│   ├── build-hashdb.ts      # Compute hashes, generate binary DB + metadata + version.json
+│   └── release-db.ts        # Publish the built DB to a GitHub Release (db:release)
+│
+├── .github/workflows/
+│   └── deploy.yml            # Build + deploy to GitHub Pages (see docs/plans/github_pages_deploy.md)
 │
 ├── tests/                    # Full-pipeline + unit tests (deno test)
 │   ├── card_detection_test.ts
@@ -388,6 +396,25 @@ in production builds. To test offline/caching behaviour, use a production build:
 
 ---
 
+### Card Images
+
+Card list entries (Collection view and scan staging review) show a small
+thumbnail from a **local, offline-only** path
+(`src/collection/card-image.ts`), keyed by `illustrationId` to match the
+build tool's art filenames. There is **no CDN hotlink to Scryfall or any
+other external service** — every image request stays same-origin. If the
+image isn't present locally (the offline art pack doesn't exist yet — see
+below), the `<img>`'s `onerror` handler swaps it to a blank placeholder
+(`.card-thumb-blank`) rather than a broken-image icon.
+
+The full ~800 MB Scryfall art set is **not** bundled with the app yet —
+bandwidth and size limits on GitHub Pages rule out serving it to every
+visitor by default. A downloadable, opt-in offline art pack (served from
+GitHub Release assets, unpacked into a local cache so the paths
+`card-image.ts` requests actually resolve) is designed but not built; see
+`docs/plans/github_pages_deploy.md` Phase 4 for the full design and
+alternatives considered.
+
 ## Usage
 
 ### Prerequisites
@@ -439,8 +466,12 @@ deno task db:art
 deno task db:build
 ```
 
-The output (`public/db/hash-db.bin` and `public/db/metadata.json`) is served as
-static assets to the PWA.
+The output (`public/db/hash-db.bin`, `public/db/metadata.json`,
+`public/db/version.json`) is served as static assets to the PWA.
+
+To publish the built DB for the GitHub Pages deploy workflow (see below),
+run `deno task db:release` instead of `db:build` directly — it runs the same
+3-step pipeline and then uploads the result to a `db-latest` GitHub Release.
 
 ### Production Build
 
@@ -459,6 +490,26 @@ in a cross-origin-isolated context. Without these headers the collection
 store fails to open in production even though OpenCV and the rest of the
 app still work.
 
+### GitHub Pages
+
+`.github/workflows/deploy.yml` builds and deploys the app to a GitHub Pages
+project site (`https://<user>.github.io/mtg_scanner_js/`) on every push to
+`main`. It does **not** run the Scryfall bulk-art download — it downloads a
+pre-built DB from the `db-latest` GitHub Release (see `deno task db:release`
+above) and only fetches OpenCV.js and builds.
+
+One-time setup:
+1. Run `deno task db:release` locally at least once (requires `gh auth
+   login` with push access to the repo) so the `db-latest` release exists.
+2. Settings → Pages → Source = "GitHub Actions" (not the legacy `gh-pages`
+   branch).
+
+GitHub Pages doesn't support custom response headers, so it can't send the
+COOP/COEP headers mentioned above — this is fine here specifically because
+the vendored OpenCV.js build inlines its WASM as base64 and doesn't use
+`SharedArrayBuffer`/pthreads. See `docs/plans/github_pages_deploy.md` for
+the full deploy design, constraints checked, and phase-by-phase notes.
+
 ---
 
 ## Design Decisions
@@ -468,7 +519,7 @@ app still work.
 - Works for non-English cards (matches by art, not text)
 - Works for foils, worn cards, and cards at odd angles
 - No runtime API calls needed (fully offline)
-- Hash DB is compact (~1.6 MB for 50k cards)
+- Hash DB is compact (~2.4 MB for ~51k illustrations)
 
 ### Why OpenCV.js in a Web Worker?
 

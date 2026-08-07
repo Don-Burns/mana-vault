@@ -133,6 +133,16 @@ async function main() {
     `Total unique illustrations in metadata: ${illustrationIds.length}`,
   );
 
+  // Drop non-English printings — the app only ever offers English cards for
+  // manual add/display. Keeps the full list on the rare illustration whose
+  // only printings are foreign-language (no English printing at all), so we
+  // never end up with an empty printings array.
+  for (const id of illustrationIds) {
+    const entry = metadata.illustrations[id];
+    const english = entry.printings.filter((p) => p.lang === "en");
+    if (english.length > 0) entry.printings = english;
+  }
+
   // Compute hashes for each illustration that has a downloaded art image.
   //
   // Every illustration is hashed twice: once from the art crop and once from
@@ -257,7 +267,21 @@ async function main() {
   await Deno.mkdir(publicDbDir, { recursive: true });
   await Deno.copyFile(HASH_DB_FILE, join(publicDbDir, "hash-db.bin"));
   await Deno.copyFile(METADATA_FILE, join(publicDbDir, "metadata.json"));
-  console.log(`  Copied to public/db/ for PWA access`);
+
+  // Content-hash version marker: the service worker caches hash-db.bin and
+  // metadata.json with cacheFirst (they're large and rarely change), which
+  // means a client that has ever installed the app will never see a rebuilt
+  // DB unless the request URL itself changes. The app fetches this file
+  // first (always network-first, see src/sw.ts) and appends `?v=<hash>` to
+  // the DB/metadata requests, so a new build is a new cache key.
+  const versionHash = bytesToHex(
+    new Uint8Array(await crypto.subtle.digest("SHA-256", dbBytes)),
+  ).slice(0, 12);
+  await Deno.writeTextFile(
+    join(publicDbDir, "version.json"),
+    JSON.stringify({ v: versionHash }),
+  );
+  console.log(`  Copied to public/db/ for PWA access (version ${versionHash})`);
 
   console.log("\nDone! The hash database is ready for the PWA.");
 }
@@ -294,6 +318,10 @@ function hexToBytes(hex: string): Uint8Array {
     bytes[i] = parseInt(hex.substring(i * 2, i * 2 + 2), 16);
   }
   return bytes;
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 function writeBigUint64(view: DataView, offset: number, value: bigint): void {

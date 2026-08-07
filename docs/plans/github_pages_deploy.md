@@ -17,9 +17,11 @@ load (hash DB + metadata), with a path to add offline card art later.
   db:build`) and uploaded as a GitHub Release asset. CI does **not** run the
   Scryfall bulk-art download (~5 GB, hours, 75ms/request rate limit) — it only
   downloads the pre-built Release asset and packages it.
-- **Card images:** out of scope for the first deploy. Full-art images
-  (`data/full_art`, 801 MB / 51,371 files) are wanted **offline-optional** as a
-  later feature — see Phase 4 for the design, not implemented now.
+- **Card images:** offline-only, no exceptions. **No CDN hotlinking** (e.g. no
+  fetching from `cards.scryfall.io` at runtime) — images only ever come from
+  an asset the app itself ships/downloads. Where art isn't available locally,
+  show a blank placeholder rather than falling back to a network fetch. See
+  Phase 4 for the design.
 - **Deliverable for this pass:** this plan document only. No code changes yet.
 
 ## Constraints verified
@@ -43,7 +45,7 @@ those headers, and GitHub Pages is viable for this app.
 
 ---
 
-## Phase 1 — Make the app base-path agnostic
+## Phase 1 — Make the app base-path agnostic ✅ done
 
 Everything currently assumes the app is served from `/`. Under a project site
 it is served from `/mtg_scanner_js/`, so every absolute path needs to become
@@ -53,7 +55,7 @@ base-relative.
 |---|---|---|
 | `vite.config.ts` | no `base` set (defaults to `/`) | `base: process.env.BASE_PATH ?? "/"`, set `BASE_PATH=/mtg_scanner_js/` only in the CI build |
 | `src/workers/detection-worker.ts:30-49` | `HashDB.load("/db/hash-db.bin")` | resolve relative to the worker's own `self.location`, since workers don't see `document.baseURI` / `import.meta.env.BASE_URL` the same way the main thread does |
-| `src/ui/scanner-view.ts:105-114` | `fetch("/db/metadata.json")` | base-relative fetch |
+| `src/ui/scanner-view.ts:130` | `fetch("/db/metadata.json")` | base-relative fetch |
 | `src/sw.ts` | `APP_SHELL = ["/", "/index.html", "/manifest.json", "/icon.svg"]`; route check `url.pathname.startsWith("/db/")` | prefix `APP_SHELL` entries with the base path; change the route check to a suffix/contains match so it still matches under a subpath |
 | `public/manifest.json` | `start_url: "/"`, icons at `/icon.svg` | add `scope`, `id`, base-prefix `start_url` and icon paths |
 | `index.html` | any absolute `/icon.svg`, `/manifest.json` links | base-relative |
@@ -76,73 +78,113 @@ base-relative.
 
 ---
 
-## Phase 2 — Shrink and version the database
+## Phase 2 — Shrink and version the database ✅ done
 
 Current sizes: `hash-db.bin` 2.4 MB (fine as-is), `metadata.json` **14.4 MB**
-(parsed synchronously on the main thread in `scanner-view.ts` at scanner
-init — this is the bigger problem).
+(was parsed synchronously on the main thread in `scanner-view.ts` at scanner
+init — this was the bigger problem, not raw size).
 
-Recommended, in priority order:
-1. **Trim metadata fields.** `metadata.json` currently stores every printing
-   (`id, set, set_name, collector_number, lang, released_at`) for all 51k
-   illustrations. Filtering to `lang === "en"` and dropping unused fields
-   should bring 14.4 MB down to roughly 4-6 MB.
-2. **Rely on gzip in transit.** GitHub Pages gzips `application/json`
-   automatically; this repetitive JSON should compress to roughly 2-3 MB over
-   the wire even before trimming. This alone makes the download acceptable —
-   the remaining cost is the `JSON.parse` pause, not the transfer.
-3. **Move the parse off the main thread.** Load `metadata.json` in the
-   detection worker (which already loads `hash-db.bin`) or a dedicated
-   worker, and post back only the single matched card's record instead of
-   parsing 14+ MB of JSON on the UI thread at startup.
-4. **Fix cache invalidation.** `src/sw.ts` serves `/db/*` with `cacheFirst`
-   against a fixed cache name (`mtg-scanner-db-v1`). Once installed, a client
-   will **never** see an updated DB unless the cache name changes. Either
-   content-hash the DB filenames (`hash-db.<hash>.bin`) so the URL itself
-   changes, or inject a build-time version into the SW's cache name constant.
+Done, in priority order:
+1. **Trim metadata fields.** Checked the actual bulk data first: the build
+   already uses Scryfall's `unique_artwork` bulk file, which is ~99.2%
+   English already (53,307 of 53,719 rows) and averages ~1.05 printings per
+   illustration. So the "drop unused fields" idea didn't apply — every field
+   (`id, set, set_name, collector_number, lang, released_at, rarity`) is
+   consumed by `card-search.ts` or `scanner-view.ts`'s alternate-printing
+   picker. Filtering `printings` to `lang === "en"` (keeping the original
+   list as a fallback for the 396 illustrations with no English printing at
+   all) is now done in `tools/build-hashdb.ts`, but only trims metadata.json
+   by a rounding error (~0.8% of rows) — **the 4-6 MB estimate above was
+   wrong**, actual size is still ~14.4 MB. Kept the filter anyway since it's
+   free and correct, but it isn't the size lever this doc assumed.
+2. **Rely on gzip in transit.** No code needed — GitHub Pages does this
+   automatically for `application/json`.
+3. **Move the parse off the main thread.** Done via a new dedicated
+   `src/workers/metadata-worker.ts` (not the detection worker — metadata is
+   also needed for the manual "Add Card" search, which shouldn't block on
+   OpenCV init). `scanner-view.ts` now awaits the worker's parsed result
+   instead of calling `fetch().then(r => r.json())` inline.
+4. **Fix cache invalidation.** Done via content-hashing: `build-hashdb.ts`
+   now writes `public/db/version.json` with a SHA-256-derived hash of
+   `hash-db.bin`. Runtime code (`src/workers/db-version.ts`) fetches that
+   marker first and appends `?v=<hash>` to the DB/metadata requests, so a
+   rebuilt DB is a new cache key rather than stuck stale under the fixed
+   `mtg-scanner-db-v1` cache name. `src/sw.ts` excludes `version.json` itself
+   from the `cacheFirst` route so the marker is always fetched fresh.
 
-Expected result: `dist/` shrinks from ~28 MB to roughly 15-20 MB, comfortably
-under all Pages limits.
+`dist/` size is essentially unchanged by this phase (~28 MB) — the real win
+was moving the 14.4 MB `JSON.parse` off the main thread and fixing cache
+staleness, not shrinking the payload. Actual `dist/` size stays comfortably
+under the 1 GB Pages cap either way.
 
 ---
 
-## Phase 3 — CI/CD
+## Phase 3 — CI/CD ✅ done
 
-No CI/CD exists today (`.github/` is absent). Proposed setup:
-
+`.github/workflows/deploy.yml` implemented:
 ```
-.github/workflows/deploy.yml
   on: push to main, workflow_dispatch
   permissions: pages: write, id-token: write
-  steps:
+  build job:
     - checkout
     - setup-deno
-    - gh release download <db-tag> --dir public/db     # pre-built hash-db.bin + metadata.json
+    - gh release download db-latest --dir public/db     # hash-db.bin + metadata.json + version.json
     - deno task opencv:download                        # vendor/ is gitignored, must be fetched
-    - BASE_PATH=/mtg_scanner_js/ deno task build
+    - BASE_PATH=/${{ repo name }}/ deno task build
     - touch dist/.nojekyll
-    - actions/upload-pages-artifact@... (path: dist)
-    - actions/deploy-pages@...
+    - actions/upload-pages-artifact (path: dist)
+  deploy job (needs: build):
+    - actions/deploy-pages
 ```
 
-Companion local task, `deno task db:release`, runs the existing 3-step
-pipeline (`db:download` → `db:art` → `db:build`) and then `gh release upload`s
-`hash-db.bin` + `metadata.json` under a version tag (e.g. `db-v3`). This keeps
-the multi-hour, ~5 GB Scryfall art download entirely off CI and out of git
-history, while still giving CI a reproducible, versioned source for the DB.
+Companion local task `deno task db:release` (`tools/release-db.ts`) runs the
+existing 3-step pipeline (`db:download` → `db:art` → `db:build`) and then
+`gh release upload`s `hash-db.bin` + `metadata.json` + `version.json`. Rather
+than a bumped version tag (`db-v3`, `db-v4`, ...) that would need a matching
+edit in `deploy.yml` every release, it overwrites one moving `db-latest`
+tag/release — CI always fetches "whatever's current" with zero workflow
+changes per DB rebuild. `version.json`'s content hash (Phase 2) is what
+actually distinguishes DB versions for cache-busting purposes; the release
+tag doesn't need to. If per-build rollback/history is ever needed, switch to
+timestamped tags and update the `gh release download` line in `deploy.yml`.
+
+This keeps the multi-hour, ~5 GB Scryfall art download entirely off CI and
+out of git history, while still giving CI a reproducible source for the DB.
 
 **Repo setting required:** Settings → Pages → Source = "GitHub Actions"
 (not the legacy `gh-pages` branch, which this plan does not use).
 
+**Not yet done:** nobody has run `deno task db:release` against the real repo
+yet, so the `db-latest` release doesn't exist — the workflow will fail at the
+`gh release download` step until that's done once, manually, with `gh auth
+login` access to the repo.
+
 ---
 
-## Phase 4 — Card images (design only, not built now)
+## Phase 4 — Card images
 
-The app currently displays **no card images** at runtime — only the user's
-own captured/warped frame (`scanner-view.ts:438-465`). Card identification is
-pure hash-vs-hash against `hash-db.bin`; Scryfall images are used only
-offline, at DB-build time. Adding real card art for display is a future
-feature, wanted **offline-optional**. Measured source sizes:
+**Decision: no CDN hotlinking, ever.** An earlier pass of this work
+implemented hotlinking card art from `cards.scryfall.io` at runtime — that
+was wrong per the locked decision above and has been reverted. Images are
+offline-only: local asset if present, blank placeholder otherwise, no
+network fallback to any third party.
+
+**UI slots wired, art not shipped yet ✅ partial.** `src/collection/card-image.ts`
+resolves a **local, same-origin** path (`${BASE_URL}art/<illustrationId>.jpg`)
+— keyed by `illustrationId` to match `tools/build-hashdb.ts`'s art filenames,
+not `scryfallId`. Wired into the two card-list renderers that previously
+showed name/set text only: `renderCardItem` (Collection view) and
+`renderStagedCard` (scan staging review), each with an `onerror` handler that
+swaps the `<img>` to a blank `.card-thumb-blank` placeholder instead of a
+broken-image icon. Since the actual art pack (option B below) isn't built,
+every image currently 404s and falls back to blank — that's the intended,
+correct behavior until B ships, not a bug.
+
+The app previously displayed **no card images** at runtime — only the user's
+own captured/warped frame (`scanner-view.ts:804-816`, the match splash).
+Card identification is pure hash-vs-hash against `hash-db.bin`; Scryfall
+images were used only offline, at DB-build time. Measured source sizes for
+the option-B/C/D alternatives below:
 
 | Source | Files | Total | Avg/file |
 |---|---|---|---|
@@ -155,27 +197,19 @@ requests would blow past the bandwidth soft limit quickly if served to every
 visitor. `data/crop_art` (4.2 GB) shouldn't be shipped at all — it's a
 build-time input only.
 
-Options for when this is built:
+**Not built — this is now the only path forward for real art, pick up when
+wanted:**
 
-**A. Hotlink Scryfall's CDN at runtime (recommended to start).**
-`metadata.json` printings already carry Scryfall `id`s, so image URLs are
-derivable directly:
-`https://cards.scryfall.io/small/front/<id[0]>/<id[1]>/<id>.jpg` (per
-Scryfall's documented URL scheme). Zero hosting cost, zero build work,
-permitted by Scryfall's API guidelines. Add a runtime `cacheFirst` SW route
-for `cards.scryfall.io` with an LRU eviction cap, so images the user actually
-scans become available offline automatically after first view. Downside: the
-first view of any given card requires network access.
-
-**B. Downloadable offline art pack (the actual "offline-optional" feature).**
+**B. Downloadable offline art pack (the actual feature).**
 Ship the 801 MB as sharded bundles (e.g. 20-40 `.zip`/`.tar` shards, or a
 single packed blob + offset index mirroring the `hash-db.bin` approach) as
 **GitHub Release assets** (2 GB/file limit, served from GitHub's own CDN —
 Release-asset bandwidth is not counted against the Pages site quota). The app
 would offer an explicit "Download offline art (~Ν MB)" action, fetch shards
-with progress, and unpack into a Cache API bucket or an IndexedDB blob store.
-Pairs naturally with option A: hotlink until the user opts into the full
-offline pack.
+with progress, and unpack into a Cache API bucket or an IndexedDB blob store
+at the `art/<illustrationId>.jpg` paths `card-image.ts` already requests —
+once unpacked, the existing `<img>` tags resolve automatically with no
+further UI change needed.
 - Re-encoding to WebP/AVIF at 146×204 should cut 801 MB to roughly
   300-400 MB.
 - Mobile storage quotas need explicit handling: iOS Safari caps origin
@@ -185,7 +219,7 @@ offline pack.
 **C. Object storage (Cloudflare R2 or similar).** Worth revisiting if the
 pack grows past what Release assets comfortably serve, or if range-request
 access to individual images becomes useful. Requires an account and CORS
-configuration — more infrastructure than A/B need, so not a first choice.
+configuration — more infrastructure than B needs, so not a first choice.
 
 **D. `crop_art` (4.2 GB).** Not part of any shipping plan. If an art-crop
 view is ever wanted in the UI, derive it client-side by cropping the
@@ -198,12 +232,12 @@ set.
 
 | Issue | Severity | Mitigation |
 |---|---|---|
-| Absolute `/`-rooted paths break under `/mtg_scanner_js/` | Blocker | Phase 1 |
-| SW `cacheFirst` on `/db/*` never invalidates → stale DB forever | High | Content-hash DB filenames or version the SW cache name |
-| 14.4 MB `JSON.parse` on the main thread at scanner init | High | Trim fields, gzip (automatic on Pages), move parse into a worker |
-| Missing `icon-192.png` / `icon-512.png` → app not installable | Medium | Generate PNG icons from `icon.svg` |
-| `dist/`, `public/db/`, `vendor/` are all gitignored → CI must reconstruct them | Medium | Release-asset DB download + `deno task opencv:download` in CI |
-| 801 MB of card art won't fit Pages' practical bandwidth/size budget | Medium | Serve via Scryfall CDN hotlink and/or Release-asset offline pack |
+| Absolute `/`-rooted paths break under `/mtg_scanner_js/` | Blocker | Resolved — Phase 1 |
+| SW `cacheFirst` on `/db/*` never invalidates → stale DB forever | High | Resolved — Phase 2, content-hashed `version.json` + `?v=` query |
+| 14.4 MB `JSON.parse` on the main thread at scanner init | High | Resolved — Phase 2, moved to `metadata-worker.ts` (field-trim didn't reduce size, see Phase 2 notes) |
+| Missing `icon-192.png` / `icon-512.png` → app not installable | Medium | Resolved — Phase 1, generated from `icon.svg` |
+| `dist/`, `public/db/`, `vendor/` are all gitignored → CI must reconstruct them | Medium | Resolved — Phase 3, Release-asset DB download + `deno task opencv:download` in CI |
+| 801 MB of card art won't fit Pages' practical bandwidth/size budget | Medium | Not started — Phase 4, design only |
 | No custom response headers on Pages (no COOP/COEP) | Resolved | Verified no `SharedArrayBuffer`/pthreads usage; vendored OpenCV inlines WASM as base64 |
 | 10.9 MB OpenCV JS chunk | Low | Already excluded from SW precache, cached lazily at runtime; gzips to ~4 MB in transit |
 | Camera API requires a secure context | Resolved | GitHub Pages serves HTTPS by default |

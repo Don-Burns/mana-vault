@@ -8,6 +8,7 @@ import {
   searchCards,
 } from "../collection/card-search.ts";
 import { ScanDedupTracker } from "./scan-dedup.ts";
+import { localCardImageUrl } from "../collection/card-image.ts";
 import { openMergeView } from "./merge-view.ts";
 
 type ScanMode = "add" | "remove" | "move";
@@ -123,14 +124,25 @@ export function ScannerView(container: HTMLElement) {
       destFolderSelect.classList.toggle("hidden", mode !== "move");
     });
 
-    // Load card metadata (names/printings for display). The hash database
-    // itself lives in the detection worker, alongside OpenCV.
+    // Load card metadata (names/printings for display) in a worker — the
+    // ~14 MB JSON.parse is slow enough to jank the UI if done inline on the
+    // main thread. The hash database itself lives in the detection worker.
     statusEl.textContent = "Loading card metadata...";
-    try {
-      metadata = await fetch("/db/metadata.json").then((r) =>
-        r.json()
-      ) as CardMetadata;
-    } catch {
+    metadata = await new Promise<CardMetadata | null>((resolve) => {
+      const worker = new Worker(
+        new URL("../workers/metadata-worker.ts", import.meta.url),
+        { type: "module" },
+      );
+      worker.onmessage = (e: MessageEvent) => {
+        resolve(e.data?.type === "ready" ? e.data.metadata as CardMetadata : null);
+        worker.terminate();
+      };
+      worker.onerror = () => {
+        resolve(null);
+        worker.terminate();
+      };
+    });
+    if (!metadata) {
       statusEl.textContent = "No card database found. Run db:build first.";
       // Continue without metadata — camera still works for testing
     }
@@ -540,6 +552,9 @@ export function ScannerView(container: HTMLElement) {
   function renderStagedCard(item: StagedCard): string {
     return `
       <div class="staged-card" data-id="${item.id}">
+        <img class="card-thumb" src="${
+      localCardImageUrl(item.illustrationId)
+    }" alt="" loading="lazy" onerror="this.classList.add('card-thumb-blank');this.removeAttribute('src')" />
         <div class="staged-info">
           <span class="card-name">${escapeHtml(item.name)}</span>
           <span class="card-set">${item.setCode.toUpperCase()} #${item.collectorNumber}</span>

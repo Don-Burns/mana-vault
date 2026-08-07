@@ -13,6 +13,7 @@ data/
 # Generated DB files (built from data/)
 public/db/hash-db.bin
 public/db/metadata.json
+public/db/version.json
 
 # Vendored WASM binaries (downloaded via deno task opencv:download)
 vendor/opencv/opencv.mjs

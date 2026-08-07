@@ -21,6 +21,7 @@ import {
   type IdentifyResult,
 } from "../detection/identify.ts";
 import { HashDB } from "../matching/hashdb.ts";
+import { versionedDbUrl } from "./db-version.ts";
 import type { Cv } from "../../vendor/opencv/mod.ts";
 
 let cv: Cv | null = null;
@@ -30,10 +31,12 @@ let isReady = false;
 async function init(): Promise<void> {
   try {
     // Vendored OpenCV.js — mod.ts awaits WASM init via top-level await.
-    // Load the hash DB (~1.6 MB) in parallel; it's needed for "identify".
+    // Load the hash DB (~2.4 MB) in parallel; it's needed for "identify".
     const [cvModule, loadedDb] = await Promise.all([
       import("../../vendor/opencv/mod.ts"),
-      HashDB.load("/db/hash-db.bin").catch(() => null),
+      versionedDbUrl("hash-db.bin").then((url) => HashDB.load(url)).catch(() =>
+        null
+      ),
     ]);
     cv = cvModule.default;
     db = loadedDb;

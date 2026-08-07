@@ -4,6 +4,9 @@ import { VitePWA } from "npm:vite-plugin-pwa";
 export default defineConfig({
   root: ".",
   publicDir: "public",
+  // Root site by default; CI sets BASE_PATH=/mtg_scanner_js/ for the GitHub
+  // Pages project-site build.
+  base: Deno.env.get("BASE_PATH") ?? "/",
   plugins: [
     VitePWA({
       // We ship a hand-written service worker (src/sw.ts) with custom caching
