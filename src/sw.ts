@@ -41,9 +41,17 @@ const APP_SHELL = [
 // vite-plugin-pwa's injectManifest step is satisfied; we merge its URLs into
 // the app-shell precache.
 const WB_MANIFEST = self.__WB_MANIFEST;
+
+// Resolve to absolute URLs before deduping: APP_SHELL entries are already
+// base-prefixed absolute paths, but WB_MANIFEST entries are bare relative
+// filenames (e.g. "icon.svg"). Deduping the raw strings misses that both
+// forms resolve to the same URL, which makes cache.addAll() throw
+// InvalidStateError on duplicate requests.
+const toAbsoluteUrl = (url: string) => new URL(url, self.registration.scope).href;
 const PRECACHE_URLS = [
-  ...APP_SHELL,
-  ...WB_MANIFEST.map((entry) => entry.url),
+  ...new Set(
+    [...APP_SHELL, ...WB_MANIFEST.map((entry) => entry.url)].map(toAbsoluteUrl),
+  ),
 ];
 
 // In the Vite dev server there is no real precache manifest, so it is empty.
@@ -58,9 +66,12 @@ self.addEventListener("install", (event: ExtendableEvent) => {
   // Skip precaching entirely in dev (URLs are Vite-transformed, not stable).
   if (!IS_DEV) {
     event.waitUntil(
-      caches.open(CACHE_NAME).then((cache) => {
-        return cache.addAll(PRECACHE_URLS);
-      }),
+      caches
+        .open(CACHE_NAME)
+        .then((cache) => cache.addAll(PRECACHE_URLS))
+        .catch((err) => {
+          console.error("Precache failed:", err);
+        }),
     );
   }
   // Activate immediately
@@ -158,7 +169,10 @@ function withCoiHeaders(response: Response): Response {
   });
 }
 
-async function cacheFirst(request: Request, cacheName: string): Promise<Response> {
+async function cacheFirst(
+  request: Request,
+  cacheName: string,
+): Promise<Response> {
   const cached = await caches.match(request);
   if (cached) return withCoiHeaders(cached);
 
@@ -182,7 +196,10 @@ async function networkFirst(request: Request): Promise<Response> {
     const cached = await caches.match(request);
     if (cached) return withCoiHeaders(cached);
     return withCoiHeaders(
-      new Response("Offline", { status: 503, statusText: "Service Unavailable" }),
+      new Response("Offline", {
+        status: 503,
+        statusText: "Service Unavailable",
+      }),
     );
   }
 }
