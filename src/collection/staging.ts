@@ -6,6 +6,7 @@
  */
 
 import { type CardCondition } from "./store.ts";
+import type { Printing } from "./card-search.ts";
 
 export interface StagedCard {
   id: string; // Temporary ID for this staging entry
@@ -26,13 +27,8 @@ export interface StagedCard {
   rarity?: string;
 }
 
-export interface AlternativePrinting {
-  scryfallId: string;
-  setCode: string;
-  setName: string;
-  collectorNumber: string;
-  lang: string;
-}
+/** An alternative printing of the same card, as offered by the printing picker. */
+export type AlternativePrinting = Printing;
 
 export class StagingList {
   private items: StagedCard[] = [];
@@ -86,10 +82,11 @@ export class StagingList {
   changePrinting(id: string, printing: AlternativePrinting): void {
     const item = this.items.find((i) => i.id === id);
     if (item) {
-      item.scryfallId = printing.scryfallId;
-      item.setCode = printing.setCode;
-      item.setName = printing.setName;
-      item.collectorNumber = printing.collectorNumber;
+      item.scryfallId = printing.id;
+      item.illustrationId = printing.illustrationId;
+      item.setCode = printing.set;
+      item.setName = printing.set_name;
+      item.collectorNumber = printing.collector_number;
       this.notify();
     }
   }

@@ -6,6 +6,12 @@ import {
 import { exportAsDB, importFromDB } from "../collection/export.ts";
 import { openMergeView } from "./merge-view.ts";
 import { getCardImageUrl } from "../collection/card-image.ts";
+import {
+  type CardMetadata,
+  printingsForName,
+} from "../collection/card-search.ts";
+import { loadMetadata } from "../collection/metadata-loader.ts";
+import { showPrintingPicker } from "./printing-picker.ts";
 export function CollectionView(container: HTMLElement) {
   const el = document.createElement("div");
   el.className = "view collection-view";
@@ -15,6 +21,7 @@ export function CollectionView(container: HTMLElement) {
   let selectedCardIds: Set<string> = new Set();
   let editMode = false;
   let listenersAttached = false;
+  let metadata: CardMetadata | null = null;
 
   el.innerHTML = `
     <div class="collection-header" id="collection-header">
@@ -54,6 +61,9 @@ export function CollectionView(container: HTMLElement) {
 
   function init() {
     renderFolderList();
+    loadMetadata().then((m) => {
+      metadata = m;
+    });
     // App.showView() calls init() every time this tab is switched to (see
     // main.ts), but the DOM here is only created once — re-running
     // setupEventListeners() on every switch would stack duplicate
@@ -182,7 +192,32 @@ export function CollectionView(container: HTMLElement) {
         if (action === "inc") adjustQuantity(cardId, 1);
         else if (action === "dec") adjustQuantity(cardId, -1);
         else if (action === "delete") deleteCardEntry(cardId);
+        else if (action === "change-printing") changePrinting(cardId);
       });
+    });
+  }
+
+  async function changePrinting(cardId: string) {
+    if (!metadata) return;
+    const card = await collectionStore.getCard(cardId);
+    if (!card) return;
+    const printings = printingsForName(metadata, card.name);
+    if (printings.length === 0) return;
+    showPrintingPicker({
+      container: el,
+      cardName: card.name,
+      printings,
+      currentScryfallId: card.scryfallId,
+      onSelect: async (printing) => {
+        card.scryfallId = printing.id;
+        card.illustrationId = printing.illustrationId;
+        card.setCode = printing.set;
+        card.setName = printing.set_name;
+        card.collectorNumber = printing.collector_number;
+        card.rarity = printing.rarity;
+        await collectionStore.putCard(card);
+        await renderCardList(currentFolderId!);
+      },
     });
   }
 
@@ -233,6 +268,7 @@ export function CollectionView(container: HTMLElement) {
             <button class="btn-sm" data-action="inc" data-card-id="${card.id}">+</button>
           </div>
           <button class="btn-sm btn-delete" data-action="delete" data-card-id="${card.id}" aria-label="Delete card" title="Delete card">🗑</button>
+          <button class="btn-sm" data-action="change-printing" data-card-id="${card.id}" title="Change printing">Printing</button>
         `
         : `<span class="card-qty">&times;${card.quantity}</span>`
     }

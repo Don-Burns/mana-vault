@@ -71,3 +71,26 @@ Deno.test("clear() empties the list", () => {
   assertEquals(staging.count, 0);
   assertEquals(staging.totalQuantity, 0);
 });
+
+Deno.test("changePrinting() swaps the selected printing's fields, including across illustrations", () => {
+  const staging = new StagingList();
+  const added = staging.add(card());
+
+  staging.changePrinting(added.id, {
+    id: "print-2",
+    illustrationId: "illus-2",
+    set: "m19",
+    set_name: "Core Set 2019",
+    collector_number: "42",
+    lang: "en",
+    released_at: "2018-07-13",
+    rarity: "common",
+  });
+
+  const item = staging.getAll().find((i) => i.id === added.id)!;
+  assertEquals(item.scryfallId, "print-2");
+  assertEquals(item.illustrationId, "illus-2");
+  assertEquals(item.setCode, "m19");
+  assertEquals(item.setName, "Core Set 2019");
+  assertEquals(item.collectorNumber, "42");
+});

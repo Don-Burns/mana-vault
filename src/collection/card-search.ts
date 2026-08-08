@@ -21,23 +21,6 @@ export interface CardMetadata {
   }>;
 }
 
-/**
- * Search the local card metadata by name substring (case-insensitive).
- * Used to populate the manual "Add Card" autocomplete in staging review.
- */
-export function searchCards(
-  metadata: CardMetadata,
-  query: string,
-  limit = 8,
-) {
-  const q = query.trim().toLowerCase();
-  if (!q) return [];
-  return Object.entries(metadata.illustrations)
-    .filter(([, ill]) => ill.name.toLowerCase().includes(q))
-    .slice(0, limit)
-    .map(([illustrationId, ill]) => ({ illustrationId, ...ill }));
-}
-
 /** Most recent English printing of an illustration, falling back to its first printing. */
 export function defaultPrintingFor(
   illustration: CardMetadata["illustrations"][string],
@@ -46,4 +29,53 @@ export function defaultPrintingFor(
     .filter((p) => p.lang === "en")
     .sort((a, b) => b.released_at.localeCompare(a.released_at))[0] ||
     illustration.printings[0];
+}
+
+/**
+ * Search the local card metadata by name substring, deduped to one result
+ * per unique card name (a name can span multiple illustration IDs — one per
+ * reprint with new art — which would otherwise show as duplicate rows).
+ */
+export function groupedCardSearch(
+  metadata: CardMetadata,
+  query: string,
+  limit = 8,
+): { name: string }[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const names = new Set<string>();
+  for (const ill of Object.values(metadata.illustrations)) {
+    if (ill.name.toLowerCase().includes(q)) names.add(ill.name);
+  }
+  return [...names].slice(0, limit).map((name) => ({ name }));
+}
+
+export interface Printing {
+  id: string;
+  set: string;
+  set_name: string;
+  collector_number: string;
+  lang: string;
+  released_at: string;
+  rarity: string;
+  illustrationId: string;
+}
+
+/**
+ * All printings of a card name, across every illustration (art variant)
+ * sharing that name, most recent first. Used to populate the printing
+ * picker with the full set of versions a user could select.
+ */
+export function printingsForName(
+  metadata: CardMetadata,
+  name: string,
+): Printing[] {
+  const printings: Printing[] = [];
+  for (const [illustrationId, ill] of Object.entries(metadata.illustrations)) {
+    if (ill.name !== name) continue;
+    for (const p of ill.printings) {
+      printings.push({ ...p, illustrationId });
+    }
+  }
+  return printings.sort((a, b) => b.released_at.localeCompare(a.released_at));
 }

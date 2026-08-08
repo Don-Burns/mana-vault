@@ -1,15 +1,22 @@
 import { Camera } from "../camera/capture.ts";
 import { CardDetector, DetectionResult } from "../detection/detector.ts";
-import { type StagedCard, StagingList } from "../collection/staging.ts";
+import {
+  type AlternativePrinting,
+  type StagedCard,
+  StagingList,
+} from "../collection/staging.ts";
 import { type CardEntry, collectionStore } from "../collection/store.ts";
 import {
   type CardMetadata,
   defaultPrintingFor,
-  searchCards,
+  groupedCardSearch,
+  printingsForName,
 } from "../collection/card-search.ts";
+import { loadMetadata } from "../collection/metadata-loader.ts";
 import { ScanDedupTracker } from "./scan-dedup.ts";
 import { getCardImageUrl } from "../collection/card-image.ts";
 import { openMergeView } from "./merge-view.ts";
+import { showPrintingPicker } from "./printing-picker.ts";
 
 type ScanMode = "add" | "remove" | "move";
 
@@ -127,26 +134,12 @@ export function ScannerView(container: HTMLElement) {
       destFolderSelect.classList.toggle("hidden", mode !== "move");
     });
 
-    // Load card metadata (names/printings for display) in a worker — the
-    // ~14 MB JSON.parse is slow enough to jank the UI if done inline on the
-    // main thread. The hash database itself lives in the detection worker.
+    // Load card metadata (names/printings for display) via the shared
+    // cached loader — the ~14 MB JSON.parse is slow enough to jank the UI if
+    // done inline on the main thread, so it happens in a worker. The hash
+    // database itself lives in the detection worker.
     statusEl.textContent = "Loading card metadata...";
-    metadata = await new Promise<CardMetadata | null>((resolve) => {
-      const worker = new Worker(
-        new URL("../workers/metadata-worker.ts", import.meta.url),
-        { type: "module" },
-      );
-      worker.onmessage = (e: MessageEvent) => {
-        resolve(
-          e.data?.type === "ready" ? e.data.metadata as CardMetadata : null,
-        );
-        worker.terminate();
-      };
-      worker.onerror = () => {
-        resolve(null);
-        worker.terminate();
-      };
-    });
+    metadata = await loadMetadata();
     if (!metadata) {
       statusEl.textContent = "No card database found. Run db:build first.";
       // Continue without metadata — camera still works for testing
@@ -365,6 +358,9 @@ export function ScannerView(container: HTMLElement) {
     printing: CardMetadata["illustrations"][string]["printings"][number],
     confidence: number,
   ) {
+    const alternatives = metadata
+      ? printingsForName(metadata, illustration.name)
+      : illustration.printings.map((p) => ({ ...p, illustrationId }));
     staging.add({
       illustrationId,
       scryfallId: printing.id,
@@ -379,13 +375,7 @@ export function ScannerView(container: HTMLElement) {
       cmc: illustration.cmc,
       colors: illustration.colors,
       rarity: printing.rarity,
-      alternativePrintings: illustration.printings.map((p) => ({
-        scryfallId: p.id,
-        setCode: p.set,
-        setName: p.set_name,
-        collectorNumber: p.collector_number,
-        lang: p.lang,
-      })),
+      alternativePrintings: alternatives,
     });
   }
 
@@ -513,6 +503,28 @@ export function ScannerView(container: HTMLElement) {
       });
     });
 
+    // Change-printing buttons
+    overlay.querySelectorAll<HTMLElement>(".staged-change-printing").forEach(
+      (btn) => {
+        btn.addEventListener("click", () => {
+          const id = btn.dataset.id!;
+          const item = staging.getAll().find((i) => i.id === id);
+          if (!item || !item.alternativePrintings?.length) return;
+          showPrintingPicker({
+            container: el,
+            cardName: item.name,
+            printings: item.alternativePrintings,
+            currentScryfallId: item.scryfallId,
+            onSelect: (printing: AlternativePrinting) => {
+              staging.changePrinting(id, printing);
+              overlay.remove();
+              showStagingReview();
+            },
+          });
+        });
+      },
+    );
+
     // Manual search-to-add
     const searchInput = overlay.querySelector<HTMLInputElement>(
       "#staging-search-input",
@@ -523,36 +535,43 @@ export function ScannerView(container: HTMLElement) {
 
     searchInput.addEventListener("input", () => {
       if (!metadata) return;
-      const matches = searchCards(metadata, searchInput.value);
+      const matches = groupedCardSearch(metadata, searchInput.value);
       if (matches.length === 0) {
         resultsEl.classList.add("hidden");
         resultsEl.innerHTML = "";
         return;
       }
-      resultsEl.innerHTML = matches.map((m) => {
-        const printing = defaultPrintingFor(m);
-        return `
-          <li class="staging-search-result" data-illustration-id="${m.illustrationId}">
+      resultsEl.innerHTML = matches.map((m) => `
+          <li class="staging-search-result" data-name="${escapeHtml(m.name)}">
             <span class="card-name">${escapeHtml(m.name)}</span>
-            <span class="card-set">${printing.set.toUpperCase()} #${printing.collector_number}</span>
           </li>
-        `;
-      }).join("");
+        `).join("");
       resultsEl.classList.remove("hidden");
 
       resultsEl.querySelectorAll<HTMLElement>(".staging-search-result")
         .forEach((li) => {
           li.addEventListener("click", () => {
-            const illustrationId = li.dataset.illustrationId!;
-            const illustration = metadata!.illustrations[illustrationId];
-            addIllustrationToStaging(
-              illustrationId,
-              illustration,
-              defaultPrintingFor(illustration),
-              100,
-            );
-            overlay.remove();
-            showStagingReview();
+            const name = li.dataset.name!;
+            const printings = printingsForName(metadata!, name);
+            resultsEl.classList.add("hidden");
+            showPrintingPicker({
+              container: el,
+              cardName: name,
+              printings,
+              onSelect: (printing) => {
+                const illustration = metadata!.illustrations[
+                  printing.illustrationId
+                ];
+                addIllustrationToStaging(
+                  printing.illustrationId,
+                  illustration,
+                  printing,
+                  100,
+                );
+                overlay.remove();
+                showStagingReview();
+              },
+            });
           });
         });
     });
@@ -582,6 +601,7 @@ export function ScannerView(container: HTMLElement) {
           <button class="btn-sm staged-qty-btn" data-id="${item.id}" data-delta="-1">-</button>
           <span class="card-qty">&times;${item.quantity}</span>
           <button class="btn-sm staged-qty-btn" data-id="${item.id}" data-delta="1">+</button>
+          <button class="btn-sm staged-change-printing" data-id="${item.id}" title="Change printing">Printing</button>
           <button class="btn-sm staged-remove" data-id="${item.id}">Remove</button>
         </div>
       </div>
