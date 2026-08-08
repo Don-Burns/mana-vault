@@ -3,10 +3,19 @@
  *
  * Manages the temporary list of scanned cards during a scan session.
  * Cards are held in staging until the user reviews and confirms them.
+ * Persisted to localStorage so a page reload doesn't lose progress.
  */
 
 import { type CardCondition } from "./store.ts";
 import type { Printing } from "./card-search.ts";
+import { showToast } from "../ui/toast.ts";
+
+const STORAGE_KEY = "mana-vault:staging";
+
+/** No-ops outside the browser (e.g. Deno tests), where `document` isn't defined. */
+function notifyUser(message: string): void {
+  if (typeof document !== "undefined") showToast(message);
+}
 
 export interface StagedCard {
   id: string; // Temporary ID for this staging entry
@@ -33,6 +42,20 @@ export type AlternativePrinting = Printing;
 export class StagingList {
   private items: StagedCard[] = [];
   private listeners: Set<() => void> = new Set();
+
+  constructor() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) throw new Error("staging cache is not an array");
+        this.items = parsed;
+      }
+    } catch {
+      this.items = [];
+      notifyUser("Couldn't restore your in-progress scan — starting fresh.");
+    }
+  }
 
   /**
    * Add a scanned card to the staging list.
@@ -140,6 +163,11 @@ export class StagingList {
   }
 
   private notify(): void {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.items));
+    } catch {
+      notifyUser("Couldn't save your scan progress.");
+    }
     for (const listener of this.listeners) {
       listener();
     }

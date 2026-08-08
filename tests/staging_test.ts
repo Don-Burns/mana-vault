@@ -3,6 +3,13 @@
 import { assertEquals } from "@std/assert";
 import { StagingList } from "../src/collection/staging.ts";
 
+// localStorage persists across tests in the same Deno process; each test
+// gets a fresh StagingList, so start with a clean slate every time.
+function freshStagingList(): StagingList {
+  localStorage.clear();
+  return new StagingList();
+}
+
 function card(overrides: Partial<Parameters<StagingList["add"]>[0]> = {}) {
   return {
     illustrationId: "illus-1",
@@ -20,7 +27,7 @@ function card(overrides: Partial<Parameters<StagingList["add"]>[0]> = {}) {
 }
 
 Deno.test("add() pushes a new entry for a new printing", () => {
-  const staging = new StagingList();
+  const staging = freshStagingList();
   staging.add(card());
 
   assertEquals(staging.count, 1);
@@ -28,7 +35,7 @@ Deno.test("add() pushes a new entry for a new printing", () => {
 });
 
 Deno.test("add() merges by scryfallId and increments quantity", () => {
-  const staging = new StagingList();
+  const staging = freshStagingList();
   staging.add(card());
   staging.add(card());
 
@@ -37,7 +44,7 @@ Deno.test("add() merges by scryfallId and increments quantity", () => {
 });
 
 Deno.test("add() keeps different printings as separate entries", () => {
-  const staging = new StagingList();
+  const staging = freshStagingList();
   staging.add(card({ scryfallId: "print-1" }));
   staging.add(card({ scryfallId: "print-2" }));
 
@@ -46,7 +53,7 @@ Deno.test("add() keeps different printings as separate entries", () => {
 });
 
 Deno.test("getAll() reflects insertion order, last item is the most recent", () => {
-  const staging = new StagingList();
+  const staging = freshStagingList();
   staging.add(card({ scryfallId: "print-1", name: "First" }));
   staging.add(card({ scryfallId: "print-2", name: "Second" }));
 
@@ -55,7 +62,7 @@ Deno.test("getAll() reflects insertion order, last item is the most recent", () 
 });
 
 Deno.test("remove() drops the entry by id", () => {
-  const staging = new StagingList();
+  const staging = freshStagingList();
   const added = staging.add(card());
   staging.remove(added.id);
 
@@ -63,7 +70,7 @@ Deno.test("remove() drops the entry by id", () => {
 });
 
 Deno.test("clear() empties the list", () => {
-  const staging = new StagingList();
+  const staging = freshStagingList();
   staging.add(card({ scryfallId: "print-1" }));
   staging.add(card({ scryfallId: "print-2" }));
   staging.clear();
@@ -73,7 +80,7 @@ Deno.test("clear() empties the list", () => {
 });
 
 Deno.test("changePrinting() swaps the selected printing's fields, including across illustrations", () => {
-  const staging = new StagingList();
+  const staging = freshStagingList();
   const added = staging.add(card());
 
   staging.changePrinting(added.id, {
@@ -93,4 +100,28 @@ Deno.test("changePrinting() swaps the selected printing's fields, including acro
   assertEquals(item.setCode, "m19");
   assertEquals(item.setName, "Core Set 2019");
   assertEquals(item.collectorNumber, "42");
+});
+
+Deno.test("persists across instances via localStorage", () => {
+  try {
+    const staging = freshStagingList();
+    staging.add(card());
+
+    const rehydrated = new StagingList();
+    assertEquals(rehydrated.count, 1);
+    assertEquals(rehydrated.getAll()[0].scryfallId, "print-1");
+  } finally {
+    localStorage.clear();
+  }
+});
+
+Deno.test("recovers from corrupt localStorage data", () => {
+  localStorage.clear();
+  localStorage.setItem("mana-vault:staging", "{not json");
+  try {
+    const staging = new StagingList();
+    assertEquals(staging.count, 0);
+  } finally {
+    localStorage.clear();
+  }
 });

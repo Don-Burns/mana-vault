@@ -181,11 +181,13 @@ export function ScannerView(container: HTMLElement) {
     stagingBtn.addEventListener("click", showStagingReview);
 
     // Update staging count display
-    staging.onChange(() => {
+    const updateStagingCount = () => {
       const countEl = el.querySelector<HTMLElement>("#staging-count")!;
       countEl.textContent = staging.totalQuantity.toString();
       // Always enabled: staging review is also where cards are added manually.
-    });
+    };
+    staging.onChange(updateStagingCount);
+    updateStagingCount(); // sync with any items rehydrated from a previous session
 
     statusEl.textContent = "Initialization complete";
   }
