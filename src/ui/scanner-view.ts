@@ -373,9 +373,6 @@ export function ScannerView(container: HTMLElement) {
     // Replace main content with staging review
     const items = staging.getAll();
 
-    const confirmDisabled =
-      validateMergeSelection(mode, destinationFolderId, secondaryFolderId) !==
-        null;
     const confirmLabel = mode === "add"
       ? "Add to Collection"
       : mode === "remove"
@@ -418,9 +415,7 @@ export function ScannerView(container: HTMLElement) {
         </div>
         <div class="staging-actions">
           <button class="btn-sm" id="btn-clear-staging">Clear All</button>
-          <button class="btn-primary" id="btn-confirm-staging" ${
-      confirmDisabled || items.length === 0 ? "disabled" : ""
-    }>
+            <button class="btn-primary" id="btn-confirm-staging" disabled>
             ${confirmLabel}
           </button>
         </div>
@@ -444,6 +439,18 @@ export function ScannerView(container: HTMLElement) {
     modeSelect.value = mode;
     await populateFolderSelect(folderSelect);
     await populateFolderSelect(destFolderSelect);
+
+    // populateFolderSelect can default destinationFolderId to "Unsorted"
+    // asynchronously, so the confirm button starts disabled and gets its
+    // real state/label set here once the default folder is known.
+    const confirmBtn = overlay.querySelector<HTMLButtonElement>(
+      "#btn-confirm-staging",
+    )!;
+    const disabledReason = items.length === 0
+      ? "Stage at least one card first."
+      : validateMergeSelection(mode, destinationFolderId, secondaryFolderId);
+    confirmBtn.disabled = disabledReason !== null;
+    confirmBtn.textContent = disabledReason ?? confirmLabel;
 
     modeSelect.addEventListener("change", () => {
       mode = modeSelect.value as ScanMode;
