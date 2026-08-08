@@ -86,19 +86,6 @@ export function ScannerView(container: HTMLElement) {
       </div>
     </div>
     <div class="scanner-controls">
-      <div class="scanner-controls-left">
-        <select id="mode-select" class="mode-select">
-          <option value="add">Add</option>
-          <option value="remove">Remove</option>
-          <option value="move">Move</option>
-        </select>
-        <select id="folder-select" class="folder-select">
-          <option value="">Select folder...</option>
-        </select>
-        <select id="dest-folder-select" class="folder-select hidden">
-          <option value="">Select folder...</option>
-        </select>
-      </div>
       <button class="capture-btn" id="capture-btn" title="Capture" disabled></button>
       <div class="scanner-controls-right">
         <button class="btn-sm btn-staging" id="btn-staging" enabled>
@@ -115,29 +102,7 @@ export function ScannerView(container: HTMLElement) {
     const overlayCanvas = el.querySelector<HTMLCanvasElement>(
       "#overlay-canvas",
     )!;
-    const folderSelect = el.querySelector<HTMLSelectElement>("#folder-select")!;
-    const destFolderSelect = el.querySelector<HTMLSelectElement>(
-      "#dest-folder-select",
-    )!;
-    const modeSelect = el.querySelector<HTMLSelectElement>("#mode-select")!;
     const stagingBtn = el.querySelector<HTMLButtonElement>("#btn-staging")!;
-
-    // Load folder list
-    await populateFolderSelect(folderSelect);
-    await populateFolderSelect(destFolderSelect);
-
-    folderSelect.addEventListener("change", () => {
-      destinationFolderId = folderSelect.value || null;
-    });
-
-    destFolderSelect.addEventListener("change", () => {
-      secondaryFolderId = destFolderSelect.value || null;
-    });
-
-    modeSelect.addEventListener("change", () => {
-      mode = modeSelect.value as ScanMode;
-      destFolderSelect.classList.toggle("hidden", mode !== "move");
-    });
 
     // Load card metadata (names/printings for display) via the shared
     // cached loader — the ~14 MB JSON.parse is slow enough to jank the UI if
@@ -204,11 +169,17 @@ export function ScannerView(container: HTMLElement) {
         `<option value="${f.id}">${escapeHtml(f.name)}</option>`
       ).join("");
 
-    // Default to "Unsorted" folder (only for the primary select)
-    const defaultFolder = folders.find((f) => f.isDefault);
-    if (defaultFolder && select.id === "folder-select") {
-      select.value = defaultFolder.id;
-      destinationFolderId = defaultFolder.id;
+    if (select.id === "folder-select") {
+      // Restore a previously-chosen folder (persists across reopening the
+      // staging review), otherwise default to "Unsorted".
+      const defaultFolder = folders.find((f) => f.isDefault);
+      const preselect = destinationFolderId ?? defaultFolder?.id;
+      if (preselect) {
+        select.value = preselect;
+        destinationFolderId = preselect;
+      }
+    } else if (secondaryFolderId) {
+      select.value = secondaryFolderId;
     }
   }
 
@@ -430,6 +401,21 @@ export function ScannerView(container: HTMLElement) {
         <div class="staging-list">
           ${stagedCardsHtml}
         </div>
+        <div class="staging-target">
+          <select id="mode-select" class="mode-select">
+            <option value="add">Add</option>
+            <option value="remove">Remove</option>
+            <option value="move">Move</option>
+          </select>
+          <select id="folder-select" class="folder-select">
+            <option value="">Select folder...</option>
+          </select>
+          <select id="dest-folder-select" class="folder-select ${
+      mode !== "move" ? "hidden" : ""
+    }">
+            <option value="">Select folder...</option>
+          </select>
+        </div>
         <div class="staging-actions">
           <button class="btn-sm" id="btn-clear-staging">Clear All</button>
           <button class="btn-primary" id="btn-confirm-staging" ${
@@ -445,6 +431,35 @@ export function ScannerView(container: HTMLElement) {
     overlay.className = "staging-overlay";
     overlay.innerHTML = reviewHtml;
     el.appendChild(overlay);
+
+    const modeSelect = overlay.querySelector<HTMLSelectElement>(
+      "#mode-select",
+    )!;
+    const folderSelect = overlay.querySelector<HTMLSelectElement>(
+      "#folder-select",
+    )!;
+    const destFolderSelect = overlay.querySelector<HTMLSelectElement>(
+      "#dest-folder-select",
+    )!;
+    modeSelect.value = mode;
+    await populateFolderSelect(folderSelect);
+    await populateFolderSelect(destFolderSelect);
+
+    modeSelect.addEventListener("change", () => {
+      mode = modeSelect.value as ScanMode;
+      overlay.remove();
+      showStagingReview();
+    });
+    folderSelect.addEventListener("change", () => {
+      destinationFolderId = folderSelect.value || null;
+      overlay.remove();
+      showStagingReview();
+    });
+    destFolderSelect.addEventListener("change", () => {
+      secondaryFolderId = destFolderSelect.value || null;
+      overlay.remove();
+      showStagingReview();
+    });
 
     // Pause scanning while the overlay covers the camera feed — otherwise
     // scans keep matching and mutating the list underneath the user.

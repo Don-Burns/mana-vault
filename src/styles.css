@@ -18,9 +18,11 @@
   --radius: 8px;
 }
 
-html, body {
+html,
+body {
   height: 100%;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    sans-serif;
   background: var(--bg-primary);
   color: var(--text-primary);
   overflow: hidden;
@@ -123,21 +125,18 @@ html, body {
 .scanner-controls {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   padding: 0.75rem 1rem;
   gap: 0.75rem;
   background: var(--bg-secondary);
+  position: relative;
 }
 
-.scanner-controls-left,
 .scanner-controls-right {
-  flex: 1;
+  position: absolute;
+  right: 1rem;
   display: flex;
   gap: 0.4rem;
-}
-
-.scanner-controls-right {
-  justify-content: flex-end;
 }
 
 .folder-select,
@@ -155,6 +154,14 @@ html, body {
 .mode-select {
   max-width: 90px;
   flex-shrink: 0;
+}
+
+.staging-target {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.75rem 1rem;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
 }
 
 .btn-staging {
@@ -404,7 +411,7 @@ html, body {
   padding: 0.1rem 0.5rem;
   line-height: 1;
   font-size: 1rem;
-  color: red
+  color: red;
 }
 
 .card-condition {
