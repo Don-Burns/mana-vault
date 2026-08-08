@@ -7,7 +7,10 @@ type ViewName = "scanner" | "collection";
 
 class App {
   private currentView: ViewName = "scanner";
-  private views: Record<ViewName, { el: HTMLElement; init: () => void; destroy: () => void }>;
+  private views: Record<
+    ViewName,
+    { el: HTMLElement; init: () => void; destroy: () => void }
+  >;
   private mainContent: HTMLElement;
 
   constructor() {
@@ -92,11 +95,17 @@ async function boot() {
   const firstRun = await isFirstRun();
 
   // Initialize the database
-  await collectionStore.open();
+  await collectionStore.open().catch((err) => {
+    console.error("Failed to open collection database:", err);
+    showToast("Error opening collection database. See console for details.");
+    throw err;
+  });
   await collectionStore.ensureDefaultFolder();
 
   if (firstRun) {
-    showToast("No existing collection found. Use Import to load a saved database.");
+    showToast(
+      "No existing collection found. Use Import to load a saved database.",
+    );
   }
 
   // Note: the service worker is registered automatically by vite-plugin-pwa

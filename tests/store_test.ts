@@ -64,22 +64,6 @@ Deno.test("folder CRUD + reorder", async () => {
   await collectionStore.close();
 });
 
-Deno.test("default folder cannot be deleted; cards move to it on folder delete", async () => {
-  await freshStore();
-
-  const def = await collectionStore.ensureDefaultFolder();
-  await assertRejects(() => collectionStore.deleteFolder(def.id));
-
-  const other = await collectionStore.createFolder("Other");
-  const card = await collectionStore.addCard(makeCard({ folderId: other.id }));
-  await collectionStore.deleteFolder(other.id);
-
-  const moved = await collectionStore.getCard(card.id);
-  assertEquals(moved?.folderId, def.id);
-
-  await collectionStore.close();
-});
-
 Deno.test("addCard merges quantity for duplicate printing", async () => {
   await freshStore();
 

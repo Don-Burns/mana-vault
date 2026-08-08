@@ -6,7 +6,10 @@
  */
 
 import { connect } from "@tursodatabase/database-wasm/vite";
-import type { DatabasePromise as Database, Transaction } from "@tursodatabase/database-common";
+import type {
+  DatabasePromise as Database,
+  Transaction,
+} from "@tursodatabase/database-common";
 
 export const DB_PATH = "mana-vault.db";
 
@@ -160,10 +163,15 @@ function cardFromRow(row: Record<string, unknown>): CardEntry {
  * Read all folders/cards out of an already-open database handle.
  * Driver-agnostic: works with any `Database`, live or scratch.
  */
-async function readSnapshot(db: Database): Promise<{ folders: Folder[]; cards: CardEntry[] }> {
+async function readSnapshot(
+  db: Database,
+): Promise<{ folders: Folder[]; cards: CardEntry[] }> {
   const folderRows = await db.all("SELECT * FROM folders ORDER BY sortOrder");
   const cardRows = await db.all("SELECT * FROM cards");
-  return { folders: folderRows.map(folderFromRow), cards: cardRows.map(cardFromRow) };
+  return {
+    folders: folderRows.map(folderFromRow),
+    cards: cardRows.map(cardFromRow),
+  };
 }
 
 /**
@@ -206,13 +214,18 @@ class CollectionStore {
    *   Defaults to the Turso WASM driver; tests inject the Node native
    *   driver (`@tursodatabase/database`), which shares the same API.
    */
-  async open(path: string = DB_PATH, driver: TursoConnect = connect): Promise<void> {
+  async open(
+    path: string = DB_PATH,
+    driver: TursoConnect = connect,
+  ): Promise<void> {
     this.driver = driver;
     try {
       this.db = await driver(path);
     } catch (err) {
       throw new Error(
-        `Failed to open database (it may be open in another tab): ${(err as Error).message}`,
+        `Failed to open database (it may be open in another tab): ${
+          (err as Error).message
+        }`,
       );
     }
     await this.initSchema(this.db);
@@ -254,7 +267,10 @@ class CollectionStore {
    * silently produce/read an empty collection in a real browser, even
    * though the Node driver used in unit tests doesn't hit it.
    */
-  private async withSnapshot<T>(path: string, fn: (db: Database) => Promise<T>): Promise<T> {
+  private async withSnapshot<T>(
+    path: string,
+    fn: (db: Database) => Promise<T>,
+  ): Promise<T> {
     const db = await this.driver(path);
     try {
       await this.initSchema(db);
@@ -278,7 +294,9 @@ class CollectionStore {
    * Read a standalone SQLite file at `path` and import its folders/cards
    * into the live collection (replacing it).
    */
-  async importFromScratch(path: string): Promise<{ folders: number; cards: number }> {
+  async importFromScratch(
+    path: string,
+  ): Promise<{ folders: number; cards: number }> {
     const data = await this.withSnapshot(path, readSnapshot);
     await this.importCollection(data);
     return { folders: data.folders.length, cards: data.cards.length };
@@ -289,10 +307,12 @@ class CollectionStore {
   /**
    * Ensure the default "Unsorted" folder exists.
    */
-  async ensureDefaultFolder(): Promise<Folder> {
+  async ensureDefaultFolder(): Promise<null> {
     const folders = await this.getAllFolders();
-    const existing = folders.find((f) => f.isDefault);
-    if (existing) return existing;
+    // If any folders exist, don't need to create a default
+    if (folders.length > 0) {
+      return null;
+    }
 
     const defaultFolder: Folder = {
       id: crypto.randomUUID(),
@@ -304,7 +324,7 @@ class CollectionStore {
     };
 
     await this.putFolder(defaultFolder);
-    return defaultFolder;
+    return null;
   }
 
   async getAllFolders(): Promise<Folder[]> {
@@ -345,20 +365,6 @@ class CollectionStore {
   }
 
   async deleteFolder(id: string): Promise<void> {
-    // Don't allow deleting the default folder
-    const folder = await this.getFolder(id);
-    if (folder?.isDefault) {
-      throw new Error("Cannot delete the default folder");
-    }
-
-    // Move all cards in this folder to the default folder
-    const defaultFolder = await this.ensureDefaultFolder();
-    const cards = await this.getCardsByFolder(id);
-    for (const card of cards) {
-      card.folderId = defaultFolder.id;
-      await this.putCard(card);
-    }
-
     await this.db!.run("DELETE FROM folders WHERE id = ?", id);
   }
 
@@ -393,7 +399,10 @@ class CollectionStore {
   // ─── Card Operations ────────────────────────────────────────────────
 
   async getCardsByFolder(folderId: string): Promise<CardEntry[]> {
-    const rows = await this.db!.all("SELECT * FROM cards WHERE folderId = ?", folderId);
+    const rows = await this.db!.all(
+      "SELECT * FROM cards WHERE folderId = ?",
+      folderId,
+    );
     return rows.map(cardFromRow);
   }
 
@@ -405,7 +414,10 @@ class CollectionStore {
   /**
    * Find a card in a specific folder by its Scryfall ID (exact printing match).
    */
-  async findCardInFolder(folderId: string, scryfallId: string): Promise<CardEntry | undefined> {
+  async findCardInFolder(
+    folderId: string,
+    scryfallId: string,
+  ): Promise<CardEntry | undefined> {
     const row = await this.db!.get(
       "SELECT * FROM cards WHERE folderId = ? AND scryfallId = ?",
       folderId,
@@ -433,7 +445,10 @@ class CollectionStore {
    */
   async addCard(card: Omit<CardEntry, "id" | "dateAdded">): Promise<CardEntry> {
     // Check if this exact printing already exists in the folder
-    const existing = await this.findCardInFolder(card.folderId, card.scryfallId);
+    const existing = await this.findCardInFolder(
+      card.folderId,
+      card.scryfallId,
+    );
 
     if (existing) {
       existing.quantity += card.quantity;
@@ -485,11 +500,16 @@ class CollectionStore {
 
     const moveQty = quantity ?? card.quantity;
     if (moveQty > card.quantity) {
-      throw new Error(`Cannot move ${moveQty}, only ${card.quantity} available`);
+      throw new Error(
+        `Cannot move ${moveQty}, only ${card.quantity} available`,
+      );
     }
 
     // Check if destination already has this printing
-    const existing = await this.findCardInFolder(destinationFolderId, card.scryfallId);
+    const existing = await this.findCardInFolder(
+      destinationFolderId,
+      card.scryfallId,
+    );
 
     if (existing) {
       // Merge into existing entry
@@ -556,7 +576,9 @@ class CollectionStore {
    * Get total card count (sum of quantities).
    */
   async getTotalCardCount(): Promise<number> {
-    const row = await this.db!.get("SELECT COALESCE(SUM(quantity), 0) as total FROM cards");
+    const row = await this.db!.get(
+      "SELECT COALESCE(SUM(quantity), 0) as total FROM cards",
+    );
     return (row?.total as number) ?? 0;
   }
 
@@ -566,7 +588,9 @@ class CollectionStore {
     return readSnapshot(this.db!);
   }
 
-  async importCollection(data: { folders: Folder[]; cards: CardEntry[] }): Promise<void> {
+  async importCollection(
+    data: { folders: Folder[]; cards: CardEntry[] },
+  ): Promise<void> {
     await writeSnapshot(this.db!, data);
   }
 
