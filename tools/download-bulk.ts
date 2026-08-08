@@ -33,9 +33,16 @@ async function main() {
   }
 
   const catalog = await catalogRes.json();
+  // `unique_artwork` collapses every printing down to one per illustration_id,
+  // which silently drops legitimate alternate printings that share the same
+  // art (e.g. Enlightened Tutor's 1997-frame vs 2015-frame retro printings in
+  // Dominaria Remastered) — exactly the versions the printing picker needs to
+  // offer. `default_cards` has one entry per real printing instead; we still
+  // group by illustration_id ourselves in build-hashdb.ts, so this just means
+  // each illustration's `printings` array is now complete instead of always
+  // having exactly one entry.
   const defaultCards = catalog.data.find(
-    // (d: any) => d.type === "default_cards",
-    (d: any) => d.type === "unique_artwork",
+    (d: any) => d.type === "default_cards",
   );
 
   if (!defaultCards) {
@@ -45,8 +52,12 @@ async function main() {
   console.log(`Bulk data info:`);
   console.log(`  Type: ${defaultCards.type}`);
   console.log(`  Updated: ${defaultCards.updated_at}`);
-  console.log(`  Size: ${(defaultCards.size / 1024 / 1024).toFixed(1)} MB`);
-  console.log(`  URI: ${defaultCards.download_uri}`);
+  console.log(
+    `  Compressed size: ${
+      (defaultCards.compressed_size / 1024 / 1024).toFixed(1)
+    } MB`,
+  );
+  console.log(`  URI: ${defaultCards.jsonl_download_uri}`);
   console.log("");
 
   // Check if we already have this version
@@ -66,86 +77,50 @@ async function main() {
   }
 
   console.log("Downloading bulk data (this may take a minute)...");
-  const dataRes = await fetch(defaultCards.download_uri);
-  if (!dataRes.ok) {
+  const dataRes = await fetch(defaultCards.jsonl_download_uri);
+  if (!dataRes.ok || !dataRes.body) {
     throw new Error(`Failed to download bulk data: ${dataRes.status}`);
   }
-  console.log("Download complete. Processing data...");
 
-  // Stream and parse the JSON array
-  // The file is a large JSON array of card objects
-  console.log("Parsing card data...");
-  const allCards: any[] = await dataRes.json();
-  console.log(`Total cards in bulk data: ${allCards.length}`);
+  // Scryfall bulk data is only offered gzip-compressed newline-delimited
+  // JSON now (no more plain JSON-array `download_uri`), so decompress and
+  // parse line-by-line as it streams in rather than buffering the whole
+  // ~600 MB decompressed file in memory at once.
+  console.log("Decompressing and parsing card data...");
+  const lines = dataRes.body
+    .pipeThrough(new DecompressionStream("gzip"))
+    .pipeThrough(new TextDecoderStream());
 
-  // Extract relevant fields, filtering to cards with art
   const cards: CardData[] = [];
   const seenIllustrations = new Set<string>();
   let skipped = 0;
+  let processed = 0;
+  let buffer = "";
 
-  for (let i = 0; i < allCards.length; i++) {
-    const card = allCards[i];
-
-    if (i > 0 && i % PROGRESS_INTERVAL === 0) {
-      console.log(`  Processing ${i}/${allCards.length}...`);
-    }
-
-    // Skip cards without illustration_id or image URIs
-    if (!card.illustration_id || !card.image_uris?.art_crop) {
-      // Check card_faces for double-faced cards
-      if (
-        card.card_faces?.[0]?.image_uris?.art_crop &&
-        card.card_faces?.[0]?.illustration_id
-      ) {
-        // Use front face
-        cards.push({
-          id: card.id,
-          oracle_id: card.oracle_id,
-          illustration_id: card.card_faces[0].illustration_id ||
-            card.illustration_id,
-          name: card.name,
-          set: card.set,
-          set_name: card.set_name,
-          collector_number: card.collector_number,
-          lang: card.lang,
-          image_uri_art_crop: card.card_faces[0].image_uris.art_crop,
-          image_uri_art_full: card.card_faces[0].image_uris.small
-            ? card.card_faces[0].image_uris.small
-            : card.card_faces[0].image_uris.normal,
-          released_at: card.released_at,
-          cmc: card.cmc,
-          colors: card.card_faces[0].colors ?? card.colors ?? [],
-          rarity: card.rarity,
-        });
-        seenIllustrations.add(
-          card.card_faces[0].illustration_id || card.illustration_id,
-        );
-      } else {
-        skipped++;
+  for await (const chunk of lines) {
+    buffer += chunk;
+    let newlineIndex: number;
+    while ((newlineIndex = buffer.indexOf("\n")) !== -1) {
+      const line = buffer.slice(0, newlineIndex);
+      buffer = buffer.slice(newlineIndex + 1);
+      if (!line.trim() || line === "[" || line === "]") continue;
+      // Each line may have a trailing comma if the file happens to be a
+      // pretty-printed JSON array instead of true JSONL; strip it either way.
+      const json = line.endsWith(",") ? line.slice(0, -1) : line;
+      processCard(JSON.parse(json), cards, seenIllustrations);
+      processed++;
+      if (processed % PROGRESS_INTERVAL === 0) {
+        console.log(`  Processed ${processed}...`);
       }
-      continue;
     }
-
-    cards.push({
-      id: card.id,
-      oracle_id: card.oracle_id,
-      illustration_id: card.illustration_id,
-      name: card.name,
-      set: card.set,
-      set_name: card.set_name,
-      collector_number: card.collector_number,
-      lang: card.lang,
-      image_uri_art_crop: card.image_uris.art_crop,
-      image_uri_art_full: card.image_uris.small
-        ? card.image_uris.small
-        : card.image_uris.normal,
-      released_at: card.released_at,
-      cmc: card.cmc,
-      colors: card.colors ?? [],
-      rarity: card.rarity,
-    });
-    seenIllustrations.add(card.illustration_id);
   }
+  if (buffer.trim() && buffer.trim() !== "]") {
+    processCard(JSON.parse(buffer), cards, seenIllustrations);
+    processed++;
+  }
+
+  console.log(`Total cards in bulk data: ${processed}`);
+  skipped = processed - cards.length;
 
   console.log("");
   console.log(`Results:`);
@@ -173,6 +148,67 @@ async function main() {
   );
 
   console.log("\nDone! Run 'deno task db:art' next to download art images.");
+}
+
+/** Extract the fields we care about from one raw Scryfall card object. */
+function processCard(
+  card: any,
+  cards: CardData[],
+  seenIllustrations: Set<string>,
+): void {
+  // Skip cards without illustration_id or image URIs
+  if (!card.illustration_id || !card.image_uris?.art_crop) {
+    // Check card_faces for double-faced cards
+    if (
+      card.card_faces?.[0]?.image_uris?.art_crop &&
+      card.card_faces?.[0]?.illustration_id
+    ) {
+      // Use front face
+      cards.push({
+        id: card.id,
+        oracle_id: card.oracle_id,
+        illustration_id: card.card_faces[0].illustration_id ||
+          card.illustration_id,
+        name: card.name,
+        set: card.set,
+        set_name: card.set_name,
+        collector_number: card.collector_number,
+        lang: card.lang,
+        image_uri_art_crop: card.card_faces[0].image_uris.art_crop,
+        image_uri_art_full: card.card_faces[0].image_uris.small
+          ? card.card_faces[0].image_uris.small
+          : card.card_faces[0].image_uris.normal,
+        released_at: card.released_at,
+        cmc: card.cmc,
+        colors: card.card_faces[0].colors ?? card.colors ?? [],
+        rarity: card.rarity,
+      });
+      seenIllustrations.add(
+        card.card_faces[0].illustration_id || card.illustration_id,
+      );
+    }
+    return;
+  }
+
+  cards.push({
+    id: card.id,
+    oracle_id: card.oracle_id,
+    illustration_id: card.illustration_id,
+    name: card.name,
+    set: card.set,
+    set_name: card.set_name,
+    collector_number: card.collector_number,
+    lang: card.lang,
+    image_uri_art_crop: card.image_uris.art_crop,
+    image_uri_art_full: card.image_uris.small
+      ? card.image_uris.small
+      : card.image_uris.normal,
+    released_at: card.released_at,
+    cmc: card.cmc,
+    colors: card.colors ?? [],
+    rarity: card.rarity,
+  });
+  seenIllustrations.add(card.illustration_id);
 }
 
 main().catch((err) => {
