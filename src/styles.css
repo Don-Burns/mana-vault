@@ -249,6 +249,11 @@ html, body {
   font-size: 0.85rem;
 }
 
+.folder-item .folder-rename,
+.folder-item .folder-delete {
+  margin-left: 0.5rem;
+}
+
 /* Utility */
 .hidden {
   display: none !important;

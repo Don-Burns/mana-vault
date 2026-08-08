@@ -46,7 +46,7 @@ export function CollectionView(container: HTMLElement) {
         <span id="selection-count">0 selected</span>
         <div class="selection-actions">
           <button class="btn-sm" id="btn-move-selected">Move to...</button>
-          <button class="btn-sm" id="btn-deselect-all">Deselect</button>
+          <button class="btn-sm" id="btn-toggle-select-all">Select All</button>
         </div>
       </div>
     </div>
@@ -92,9 +92,9 @@ export function CollectionView(container: HTMLElement) {
       "click",
       handleMoveSelected,
     );
-    el.querySelector("#btn-deselect-all")!.addEventListener(
+    el.querySelector("#btn-toggle-select-all")!.addEventListener(
       "click",
-      deselectAll,
+      handleToggleSelectAll,
     );
     el.querySelector("#btn-move-cancel")!.addEventListener("click", () => {
       (el.querySelector("#move-dialog") as HTMLDialogElement).close();
@@ -123,6 +123,18 @@ export function CollectionView(container: HTMLElement) {
     listEl.querySelectorAll<HTMLElement>(".folder-item").forEach((item) => {
       item.addEventListener("click", () => openFolder(item.dataset.folderId!));
     });
+    listEl.querySelectorAll<HTMLElement>(".folder-rename").forEach((btn) => {
+      btn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        handleRenameFolder(btn.dataset.folderId!);
+      });
+    });
+    listEl.querySelectorAll<HTMLElement>(".folder-delete").forEach((btn) => {
+      btn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        handleDeleteFolder(btn.dataset.folderId!);
+      });
+    });
   }
 
   function renderFolderItem(folder: Folder, cardCount: number): string {
@@ -133,8 +145,31 @@ export function CollectionView(container: HTMLElement) {
         <span class="folder-count">${cardCount} card${
       cardCount !== 1 ? "s" : ""
     }</span>
+        <button class="btn-sm folder-rename" data-folder-id="${folder.id}" title="Rename folder">✎</button>
+        <button class="btn-sm btn-delete folder-delete" data-folder-id="${folder.id}" title="Delete folder">🗑</button>
       </div>
     `;
+  }
+
+  async function handleRenameFolder(folderId: string) {
+    const folder = await collectionStore.getFolder(folderId);
+    if (!folder) return;
+    const name = prompt("Rename folder:", folder.name);
+    if (!name?.trim()) return;
+    await collectionStore.renameFolder(folderId, name.trim());
+    await renderFolderList();
+  }
+
+  async function handleDeleteFolder(folderId: string) {
+    const folder = await collectionStore.getFolder(folderId);
+    if (!folder) return;
+    if (!confirm(`Delete folder "${folder.name}"?`)) return;
+    try {
+      await collectionStore.deleteFolder(folderId);
+      await renderFolderList();
+    } catch (err) {
+      alert((err as Error).message);
+    }
   }
 
   // ─── Folder Detail ──────────────────────────────────────────────
@@ -302,6 +337,17 @@ export function CollectionView(container: HTMLElement) {
     }
   }
 
+  function selectAll() {
+    const ids = [...el.querySelectorAll<HTMLElement>(".card-item")].map(
+      (item) => item.dataset.cardId!,
+    );
+    selectedCardIds = new Set(ids);
+    el.querySelectorAll(".card-item").forEach((item) => {
+      item.classList.add("selected");
+    });
+    updateSelectionBar();
+  }
+
   function deselectAll() {
     selectedCardIds.clear();
     el.querySelectorAll(".card-item.selected").forEach((item) => {
@@ -310,16 +356,23 @@ export function CollectionView(container: HTMLElement) {
     updateSelectionBar();
   }
 
+  function handleToggleSelectAll() {
+    if (selectedCardIds.size === 0) selectAll();
+    else deselectAll();
+  }
+
   function updateSelectionBar() {
     const bar = el.querySelector<HTMLElement>("#selection-bar")!;
     const count = el.querySelector<HTMLElement>("#selection-count")!;
+    const toggleBtn = el.querySelector<HTMLButtonElement>(
+      "#btn-toggle-select-all",
+    )!;
 
-    if (selectedCardIds.size > 0) {
-      bar.classList.remove("hidden");
-      count.textContent = `${selectedCardIds.size} selected`;
-    } else {
-      bar.classList.add("hidden");
-    }
+    bar.classList.toggle("hidden", !editMode);
+    count.textContent = `${selectedCardIds.size} selected`;
+    toggleBtn.textContent = selectedCardIds.size === 0
+      ? "Select All"
+      : "Deselect";
   }
 
   // ─── Move Flow ──────────────────────────────────────────────────

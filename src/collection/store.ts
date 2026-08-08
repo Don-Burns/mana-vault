@@ -365,6 +365,10 @@ class CollectionStore {
   }
 
   async deleteFolder(id: string): Promise<void> {
+    const cards = await this.getCardsByFolder(id);
+    if (cards.length > 0) {
+      throw new Error("Cannot delete a folder that still contains cards");
+    }
     await this.db!.run("DELETE FROM folders WHERE id = ?", id);
   }
 

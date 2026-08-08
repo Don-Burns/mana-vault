@@ -54,12 +54,33 @@ Deno.test("folder CRUD + reorder", async () => {
     a.id,
   ]);
 
-  // Deleting a folder ensures a default "Unsorted" folder exists to receive
-  // its cards, so it's created here as a side effect.
+  // b has no cards, so it can be deleted freely.
   await collectionStore.deleteFolder(b.id);
   const remaining = (await collectionStore.getAllFolders()).map((f) => f.id);
   assertEquals(remaining.includes(a.id), true);
   assertEquals(remaining.includes(b.id), false);
+
+  await collectionStore.close();
+});
+
+Deno.test("deleteFolder throws if the folder still contains cards", async () => {
+  await freshStore();
+
+  const folder = await collectionStore.createFolder("Has Cards");
+  await collectionStore.addCard(makeCard({ folderId: folder.id }));
+
+  await assertRejects(() => collectionStore.deleteFolder(folder.id));
+
+  await collectionStore.close();
+});
+
+Deno.test("deleteFolder succeeds once the folder is empty", async () => {
+  await freshStore();
+
+  const folder = await collectionStore.createFolder("Empty");
+  await collectionStore.deleteFolder(folder.id);
+
+  assertEquals(await collectionStore.getFolder(folder.id), undefined);
 
   await collectionStore.close();
 });
