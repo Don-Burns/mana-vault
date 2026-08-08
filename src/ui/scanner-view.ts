@@ -8,7 +8,7 @@ import {
   searchCards,
 } from "../collection/card-search.ts";
 import { ScanDedupTracker } from "./scan-dedup.ts";
-import { localCardImageUrl } from "../collection/card-image.ts";
+import { getCardImageUrl } from "../collection/card-image.ts";
 import { openMergeView } from "./merge-view.ts";
 
 type ScanMode = "add" | "remove" | "move";
@@ -134,7 +134,9 @@ export function ScannerView(container: HTMLElement) {
         { type: "module" },
       );
       worker.onmessage = (e: MessageEvent) => {
-        resolve(e.data?.type === "ready" ? e.data.metadata as CardMetadata : null);
+        resolve(
+          e.data?.type === "ready" ? e.data.metadata as CardMetadata : null,
+        );
         worker.terminate();
       };
       worker.onerror = () => {
@@ -392,7 +394,7 @@ export function ScannerView(container: HTMLElement) {
     }
   }
 
-  function showStagingReview() {
+  async function showStagingReview() {
     // Replace main content with staging review
     const items = staging.getAll();
 
@@ -406,6 +408,11 @@ export function ScannerView(container: HTMLElement) {
       ? "Remove from Collection"
       : "Move to Collection";
 
+    const stagedCardsHtml = items.length > 0
+      ? (await Promise.all(items.map((item) => renderStagedCard(item))))
+        .join("")
+      : `<p class="staging-empty">No cards staged yet.</p>`;
+
     const reviewHtml = `
       <div class="staging-review">
         <div class="staging-review-header">
@@ -418,11 +425,7 @@ export function ScannerView(container: HTMLElement) {
           <ul class="staging-search-results hidden" id="staging-search-results"></ul>
         </div>
         <div class="staging-list">
-          ${
-      items.length > 0
-        ? items.map((item) => renderStagedCard(item)).join("")
-        : `<p class="staging-empty">No cards staged yet.</p>`
-    }
+          ${stagedCardsHtml}
         </div>
         <div class="staging-actions">
           <button class="btn-sm" id="btn-clear-staging">Clear All</button>
@@ -549,12 +552,12 @@ export function ScannerView(container: HTMLElement) {
     });
   }
 
-  function renderStagedCard(item: StagedCard): string {
+  async function renderStagedCard(item: StagedCard): Promise<string> {
     return `
       <div class="staged-card" data-id="${item.id}">
-        <img class="card-thumb" src="${
-      localCardImageUrl(item.illustrationId)
-    }" alt="" loading="lazy" onerror="this.classList.add('card-thumb-blank');this.removeAttribute('src')" />
+        <img class="card-thumb" crossorigin="anonymous" src="${await getCardImageUrl(
+      item.illustrationId,
+    )}" alt="" loading="lazy" onerror="this.classList.add('card-thumb-blank');this.removeAttribute('src')" />
         <div class="staged-info">
           <span class="card-name">${escapeHtml(item.name)}</span>
           <span class="card-set">${item.setCode.toUpperCase()} #${item.collectorNumber}</span>

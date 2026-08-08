@@ -17,22 +17,22 @@ load (hash DB + metadata), with a path to add offline card art later.
   db:build`) and uploaded as a GitHub Release asset. CI does **not** run the
   Scryfall bulk-art download (~5 GB, hours, 75ms/request rate limit) — it only
   downloads the pre-built Release asset and packages it.
-- **Card images:** offline-only, no exceptions. **No CDN hotlinking** (e.g. no
-  fetching from `cards.scryfall.io` at runtime) — images only ever come from
-  an asset the app itself ships/downloads. Where art isn't available locally,
-  show a blank placeholder rather than falling back to a network fetch. See
-  Phase 4 for the design.
+- **Card images:** local offline art pack first, falling back to Scryfall's
+  CDN (`cards.scryfall.io`, "normal" resolution, looked up by
+  `illustration_id` via `api.scryfall.com/cards/search`) when the local asset
+  isn't present, and a blank placeholder if that also fails. **Reverses the
+  previous "no CDN hotlinking, ever" decision** — see Phase 4 for the design.
 - **Deliverable for this pass:** this plan document only. No code changes yet.
 
 ## Constraints verified
-| GitHub Pages limit | Value | Status |
-|---|---|---|
-| Published site size | 1 GB soft cap | OK — current `dist/` ~28 MB, DB after shrinking ~15-20 MB |
-| Per-file size | 100 MB | OK — largest tracked asset is the 10.9 MB OpenCV chunk |
-| Bandwidth | ~100 GB/month soft | OK for app shell + DB; would **not** be OK for shipping 801 MB of art to every visitor |
-| Custom response headers | Not supported (no COOP/COEP, no custom CSP) | Checked — see below |
-| SPA URL rewriting | Not supported (static file server only) | Mitigated with `404.html` copy of `index.html` |
-| HTTPS | Always on | Satisfies the Camera API's secure-context requirement |
+| GitHub Pages limit      | Value                                       | Status                                                                                 |
+| ----------------------- | ------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Published site size     | 1 GB soft cap                               | OK — current `dist/` ~28 MB, DB after shrinking ~15-20 MB                              |
+| Per-file size           | 100 MB                                      | OK — largest tracked asset is the 10.9 MB OpenCV chunk                                 |
+| Bandwidth               | ~100 GB/month soft                          | OK for app shell + DB; would **not** be OK for shipping 801 MB of art to every visitor |
+| Custom response headers | Not supported (no COOP/COEP, no custom CSP) | Checked — see below                                                                    |
+| SPA URL rewriting       | Not supported (static file server only)     | Mitigated with `404.html` copy of `index.html`                                         |
+| HTTPS                   | Always on                                   | Satisfies the Camera API's secure-context requirement                                  |
 
 **COOP/COEP finding:** `vite.config.ts`'s dev server sets
 `Cross-Origin-Opener-Policy: same-origin` / `Cross-Origin-Embedder-Policy:
@@ -51,14 +51,14 @@ Everything currently assumes the app is served from `/`. Under a project site
 it is served from `/mtg_scanner_js/`, so every absolute path needs to become
 base-relative.
 
-| File | Current | Change |
-|---|---|---|
-| `vite.config.ts` | no `base` set (defaults to `/`) | `base: process.env.BASE_PATH ?? "/"`, set `BASE_PATH=/mtg_scanner_js/` only in the CI build |
-| `src/workers/detection-worker.ts:30-49` | `HashDB.load("/db/hash-db.bin")` | resolve relative to the worker's own `self.location`, since workers don't see `document.baseURI` / `import.meta.env.BASE_URL` the same way the main thread does |
-| `src/ui/scanner-view.ts:130` | `fetch("/db/metadata.json")` | base-relative fetch |
-| `src/sw.ts` | `APP_SHELL = ["/", "/index.html", "/manifest.json", "/icon.svg"]`; route check `url.pathname.startsWith("/db/")` | prefix `APP_SHELL` entries with the base path; change the route check to a suffix/contains match so it still matches under a subpath |
-| `public/manifest.json` | `start_url: "/"`, icons at `/icon.svg` | add `scope`, `id`, base-prefix `start_url` and icon paths |
-| `index.html` | any absolute `/icon.svg`, `/manifest.json` links | base-relative |
+| File                                    | Current                                                                                                          | Change                                                                                                                                                          |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `vite.config.ts`                        | no `base` set (defaults to `/`)                                                                                  | `base: process.env.BASE_PATH ?? "/"`, set `BASE_PATH=/mtg_scanner_js/` only in the CI build                                                                     |
+| `src/workers/detection-worker.ts:30-49` | `HashDB.load("/db/hash-db.bin")`                                                                                 | resolve relative to the worker's own `self.location`, since workers don't see `document.baseURI` / `import.meta.env.BASE_URL` the same way the main thread does |
+| `src/ui/scanner-view.ts:130`            | `fetch("/db/metadata.json")`                                                                                     | base-relative fetch                                                                                                                                             |
+| `src/sw.ts`                             | `APP_SHELL = ["/", "/index.html", "/manifest.json", "/icon.svg"]`; route check `url.pathname.startsWith("/db/")` | prefix `APP_SHELL` entries with the base path; change the route check to a suffix/contains match so it still matches under a subpath                            |
+| `public/manifest.json`                  | `start_url: "/"`, icons at `/icon.svg`                                                                           | add `scope`, `id`, base-prefix `start_url` and icon paths                                                                                                       |
+| `index.html`                            | any absolute `/icon.svg`, `/manifest.json` links                                                                 | base-relative                                                                                                                                                   |
 
 **Additional gotchas:**
 - **Service worker scope** is limited to the directory it's served from —
@@ -163,22 +163,26 @@ login` access to the repo.
 
 ## Phase 4 — Card images
 
-**Decision: no CDN hotlinking, ever.** An earlier pass of this work
-implemented hotlinking card art from `cards.scryfall.io` at runtime — that
-was wrong per the locked decision above and has been reverted. Images are
-offline-only: local asset if present, blank placeholder otherwise, no
-network fallback to any third party.
+**Decision reversed: remote CDN fallback is now allowed.** The earlier
+"no CDN hotlinking, ever" decision above has been overturned. Images are:
+local asset if present, else a live lookup against Scryfall's CDN, else a
+blank placeholder.
 
-**UI slots wired, art not shipped yet ✅ partial.** `src/collection/card-image.ts`
-resolves a **local, same-origin** path (`${BASE_URL}art/<illustrationId>.jpg`)
-— keyed by `illustrationId` to match `tools/build-hashdb.ts`'s art filenames,
-not `scryfallId`. Wired into the two card-list renderers that previously
-showed name/set text only: `renderCardItem` (Collection view) and
-`renderStagedCard` (scan staging review), each with an `onerror` handler that
-swaps the `<img>` to a blank `.card-thumb-blank` placeholder instead of a
-broken-image icon. Since the actual art pack (option B below) isn't built,
-every image currently 404s and falls back to blank — that's the intended,
-correct behavior until B ships, not a bug.
+**Implemented.** `src/collection/card-image.ts`'s `getCardImageUrl(illustrationId)`
+is `async` and does the fallback itself: `HEAD`-checks the local, same-origin
+path (`${BASE_URL}art/<illustrationId>.jpg`, keyed by `illustrationId` to
+match `tools/build-hashdb.ts`'s art filenames, not `scryfallId`); if that
+404s, it looks up `illustration_id:<id>` on `api.scryfall.com/cards/search`
+(deduped/cached in-memory per illustration id, plus the browser's normal
+HTTP cache) and returns the Scryfall `normal`-size image URL; if neither
+source has the image it returns `undefined`, which the callers'
+`<img onerror>` handler turns into a blank `.card-thumb-blank` placeholder.
+Used by the two card-list renderers: `renderCardItem` (Collection view) and
+`renderStagedCard` (scan staging review) — both are now `async` themselves
+to `await` it. Since the actual local art pack (option B below) isn't built
+yet, every image currently falls straight through to the Scryfall fallback —
+that's
+expected until B ships.
 
 The app previously displayed **no card images** at runtime — only the user's
 own captured/warped frame (`scanner-view.ts:804-816`, the match splash).
@@ -186,10 +190,10 @@ Card identification is pure hash-vs-hash against `hash-db.bin`; Scryfall
 images were used only offline, at DB-build time. Measured source sizes for
 the option-B/C/D alternatives below:
 
-| Source | Files | Total | Avg/file |
-|---|---|---|---|
-| `data/full_art` (Scryfall `small`, 146×204) | 51,371 | 801 MB | ~14 KB |
-| `data/crop_art` (Scryfall `art_crop`, full res) | 51,374 | 4.2 GB | ~85 KB |
+| Source                                          | Files  | Total  | Avg/file |
+| ----------------------------------------------- | ------ | ------ | -------- |
+| `data/full_art` (Scryfall `small`, 146×204)     | 51,371 | 801 MB | ~14 KB   |
+| `data/crop_art` (Scryfall `art_crop`, full res) | 51,374 | 4.2 GB | ~85 KB   |
 
 **801 MB will not go on GitHub Pages as part of the site.** It's within the
 1 GB cap only by itself (leaving nothing for the app/DB), and 51k individual
@@ -226,21 +230,58 @@ view is ever wanted in the UI, derive it client-side by cropping the
 already-available full-art image rather than shipping a second 4.2 GB asset
 set.
 
+**Not started — extend the SW cache to the Scryfall fallback requests.**
+Today the only caching on the two live Scryfall requests `getCardImageUrl`
+makes (`api.scryfall.com/cards/search?...` and the `cards.scryfall.io`
+image itself) is the browser's native HTTP cache honoring Scryfall's
+`Cache-Control: public, max-age=172800` (2 days) — no code in this repo is
+involved. `src/sw.ts` already has a `cacheFirst()` helper used for the hash
+DB and OpenCV WASM, but its fetch handler currently only intercepts
+same-origin requests (`sw.ts:107`), so these two cross-origin hosts pass
+straight through un-cached by the SW.
+
+Plan:
+1. Add a new cache bucket, e.g. `SCRYFALL_CACHE_NAME = "mana-vault-scryfall-v1"`,
+   kept separate from `CACHE_NAME`/`DB_CACHE_NAME` so it can be
+   pruned/versioned independently.
+2. Relax the origin filter in the `fetch` handler to also allow
+   `api.scryfall.com` and `cards.scryfall.io` through, routing both to
+   `cacheFirst(event.request, SCRYFALL_CACHE_NAME)` — reusing the existing
+   helper as-is. (Verified both hosts send
+   `Access-Control-Allow-Origin: *`, so these come back as normal,
+   non-opaque CORS responses that the Cache API can store and read.)
+3. Add `SCRYFALL_CACHE_NAME` to the `activate` handler's cache-cleanup
+   allow-list (it currently deletes any cache key that isn't `CACHE_NAME`/
+   `DB_CACHE_NAME`) so it survives SW updates.
+
+Effect: `cacheFirst()` doesn't check `Cache-Control`/expiry at all — once a
+response lands in the Cache API it's served indefinitely (no revalidation,
+no 2-day cutoff) until explicitly evicted (bump the cache name to `-v2`) or
+the browser evicts it under storage pressure. No changes needed to
+`card-image.ts` — the SW intercepts the same `fetch()` calls transparently.
+
+Trade-offs: illustration→image mappings are effectively immutable, so
+unbounded caching is fine content-wise, but there's no eviction/max-entries
+policy (consistent with the existing DB/app-shell caches, which have the
+same property). `cacheFirst()` also runs responses through
+`withCoiHeaders()` (COOP/COEP injection) — harmless for JSON/image
+responses but applied uniformly with no per-route opt-out today.
+
 ---
 
 ## Issues summary
 
-| Issue | Severity | Mitigation |
-|---|---|---|
-| Absolute `/`-rooted paths break under `/mtg_scanner_js/` | Blocker | Resolved — Phase 1 |
-| SW `cacheFirst` on `/db/*` never invalidates → stale DB forever | High | Resolved — Phase 2, content-hashed `version.json` + `?v=` query |
-| 14.4 MB `JSON.parse` on the main thread at scanner init | High | Resolved — Phase 2, moved to `metadata-worker.ts` (field-trim didn't reduce size, see Phase 2 notes) |
-| Missing `icon-192.png` / `icon-512.png` → app not installable | Medium | Resolved — Phase 1, generated from `icon.svg` |
-| `dist/`, `public/db/`, `vendor/` are all gitignored → CI must reconstruct them | Medium | Resolved — Phase 3, Release-asset DB download + `deno task opencv:download` in CI |
-| 801 MB of card art won't fit Pages' practical bandwidth/size budget | Medium | Not started — Phase 4, design only |
-| No custom response headers on Pages (no COOP/COEP) | Resolved | Verified no `SharedArrayBuffer`/pthreads usage; vendored OpenCV inlines WASM as base64 |
-| 10.9 MB OpenCV JS chunk | Low | Already excluded from SW precache, cached lazily at runtime; gzips to ~4 MB in transit |
-| Camera API requires a secure context | Resolved | GitHub Pages serves HTTPS by default |
+| Issue                                                                          | Severity | Mitigation                                                                                           |
+| ------------------------------------------------------------------------------ | -------- | ---------------------------------------------------------------------------------------------------- |
+| Absolute `/`-rooted paths break under `/mtg_scanner_js/`                       | Blocker  | Resolved — Phase 1                                                                                   |
+| SW `cacheFirst` on `/db/*` never invalidates → stale DB forever                | High     | Resolved — Phase 2, content-hashed `version.json` + `?v=` query                                      |
+| 14.4 MB `JSON.parse` on the main thread at scanner init                        | High     | Resolved — Phase 2, moved to `metadata-worker.ts` (field-trim didn't reduce size, see Phase 2 notes) |
+| Missing `icon-192.png` / `icon-512.png` → app not installable                  | Medium   | Resolved — Phase 1, generated from `icon.svg`                                                        |
+| `dist/`, `public/db/`, `vendor/` are all gitignored → CI must reconstruct them | Medium   | Resolved — Phase 3, Release-asset DB download + `deno task opencv:download` in CI                    |
+| 801 MB of card art won't fit Pages' practical bandwidth/size budget            | Medium   | Not started — Phase 4, design only                                                                   |
+| No custom response headers on Pages (no COOP/COEP)                             | Resolved | Verified no `SharedArrayBuffer`/pthreads usage; vendored OpenCV inlines WASM as base64               |
+| 10.9 MB OpenCV JS chunk                                                        | Low      | Already excluded from SW precache, cached lazily at runtime; gzips to ~4 MB in transit               |
+| Camera API requires a secure context                                           | Resolved | GitHub Pages serves HTTPS by default                                                                 |
 
 ## Open questions
 - Offline art pack format: sharded archives vs. a single packed blob + offset

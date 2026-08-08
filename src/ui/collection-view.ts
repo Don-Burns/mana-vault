@@ -3,12 +3,9 @@ import {
   collectionStore,
   type Folder,
 } from "../collection/store.ts";
-import {
-  exportAsDB,
-  importFromDB,
-} from "../collection/export.ts";
+import { exportAsDB, importFromDB } from "../collection/export.ts";
 import { openMergeView } from "./merge-view.ts";
-import { localCardImageUrl } from "../collection/card-image.ts";
+import { getCardImageUrl } from "../collection/card-image.ts";
 export function CollectionView(container: HTMLElement) {
   const el = document.createElement("div");
   el.className = "view collection-view";
@@ -156,7 +153,10 @@ export function CollectionView(container: HTMLElement) {
       return;
     }
 
-    listEl.innerHTML = cards.map((card) => renderCardItem(card)).join("");
+    listEl.innerHTML =
+      (await Promise.all(cards.map((card) => renderCardItem(card)))).join(
+        "",
+      );
 
     // Attach click handlers for selection
     listEl.querySelectorAll<HTMLElement>(".card-item").forEach((item) => {
@@ -210,15 +210,15 @@ export function CollectionView(container: HTMLElement) {
     updateSelectionBar();
   }
 
-  function renderCardItem(card: CardEntry): string {
+  async function renderCardItem(card: CardEntry): Promise<string> {
     const isSelected = selectedCardIds.has(card.id);
     return `
       <div class="card-item ${
       isSelected ? "selected" : ""
     }" data-card-id="${card.id}">
-        <img class="card-thumb" src="${
-      localCardImageUrl(card.illustrationId)
-    }" alt="" loading="lazy" onerror="this.classList.add('card-thumb-blank');this.removeAttribute('src')" />
+        <img class="card-thumb" crossorigin="anonymous" src="${await getCardImageUrl(
+      card.illustrationId,
+    )}" alt="" loading="lazy" onerror="this.classList.add('card-thumb-blank');this.removeAttribute('src')" />
         <div class="card-info">
           <span class="card-name">${escapeHtml(card.name)}</span>
           <span class="card-set">${card.setCode.toUpperCase()} #${card.collectorNumber}</span>
@@ -319,7 +319,9 @@ export function CollectionView(container: HTMLElement) {
     if (!destFolderId) return;
 
     const cardIds = [...selectedCardIds];
-    const sourceCards = await collectionStore.getCardsByFolder(currentFolderId!);
+    const sourceCards = await collectionStore.getCardsByFolder(
+      currentFolderId!,
+    );
     const destCards = await collectionStore.getCardsByFolder(destFolderId);
     const moving = sourceCards.filter((c) => cardIds.includes(c.id));
 
@@ -410,7 +412,9 @@ export function CollectionView(container: HTMLElement) {
     try {
       const result = await importFromDB();
       await renderFolderList();
-      alert(`Imported database: ${result.folders} folders, ${result.cards} cards.`);
+      alert(
+        `Imported database: ${result.folders} folders, ${result.cards} cards.`,
+      );
     } catch (err) {
       alert(`Import failed: ${(err as Error).message}`);
     }
