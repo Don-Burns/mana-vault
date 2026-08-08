@@ -556,7 +556,7 @@ export function ScannerView(container: HTMLElement) {
     return `
       <div class="staged-card" data-id="${item.id}">
         <img class="card-thumb" crossorigin="anonymous" src="${await getCardImageUrl(
-      item.illustrationId,
+      item.scryfallId,
     )}" alt="" loading="lazy" onerror="this.classList.add('card-thumb-blank');this.removeAttribute('src')" />
         <div class="staged-info">
           <span class="card-name">${escapeHtml(item.name)}</span>

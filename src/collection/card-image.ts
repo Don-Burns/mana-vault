@@ -5,42 +5,34 @@
  *
  * Resolves to an asset the app itself would ship (a future downloadable
  * offline art pack, see docs/plans/github_pages_deploy.md Phase 4, option B
- * — not built yet). Keyed by `illustrationId` to match
- * `tools/build-hashdb.ts`'s art filenames.
+ * — not built yet). Keyed by `scryfallId` so it points at the exact
+ * printing, matching the remote fallback below.
  */
-function localCardImageUrl(illustrationId: string): string {
-  return `${import.meta.env?.BASE_URL ?? "/"}art/${illustrationId}.jpg`;
+function localCardImageUrl(scryfallId: string): string {
+  return `${import.meta.env?.BASE_URL ?? "/"}art/${scryfallId}.jpg`;
 }
 
-// Scryfall sends `Cache-Control: public, max-age=...` on this response, so
-// the browser's own HTTP cache persists it across calls/reloads — no
-// in-memory cache needed here.
-async function fetchRemoteCardImageUrl(
-  illustrationId: string,
-): Promise<string | undefined> {
-  try {
-    const res = await fetch(
-      `https://api.scryfall.com/cards/search?q=illustration_id%3A${illustrationId}`,
-    );
-    if (!res.ok) return undefined;
-    const { data } = await res.json();
-    return data?.[0]?.image_uris?.normal;
-  } catch {
-    return undefined;
-  }
+// Direct redirect to the exact printing's image — no fetch/JSON round-trip
+// needed, the browser's <img> request follows the 302 itself, and the
+// existing onerror handler already blanks the thumbnail if it 404s.
+function remoteCardImageUrl(scryfallId: string): string {
+  return `https://api.scryfall.com/cards/${scryfallId}?format=image&version=border_crop`;
 }
 
 /**
  * Returns the URL for a card's image, either local or from a remote source.
  * Prefers the local offline art pack if it exists, falling back to
- * Scryfall's CDN (normal resolution) looked up by `illustrationId`. Returns
- * `undefined` if neither is available, so callers can show a blank
- * placeholder.
+ * Scryfall's CDN for the exact printing. Both are keyed by `scryfallId` so
+ * the image always matches the exact set/collector number, even after a
+ * user correction. Returns `undefined` if `scryfallId` is missing, so
+ * callers can show a blank placeholder.
  */
 export async function getCardImageUrl(
-  illustrationId: string,
+  scryfallId: string,
 ): Promise<string | undefined> {
-  const localUrl = localCardImageUrl(illustrationId);
+  if (!scryfallId) return undefined;
+
+  const localUrl = localCardImageUrl(scryfallId);
   try {
     const res = await fetch(localUrl, { method: "HEAD" });
     // `res.ok` alone isn't enough: Vite's dev server (and many static hosts
@@ -57,5 +49,5 @@ export async function getCardImageUrl(
     // fall through to remote
   }
 
-  return await fetchRemoteCardImageUrl(illustrationId);
+  return remoteCardImageUrl(scryfallId);
 }

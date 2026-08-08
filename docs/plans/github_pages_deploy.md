@@ -18,10 +18,11 @@ load (hash DB + metadata), with a path to add offline card art later.
   Scryfall bulk-art download (~5 GB, hours, 75ms/request rate limit) — it only
   downloads the pre-built Release asset and packages it.
 - **Card images:** local offline art pack first, falling back to Scryfall's
-  CDN (`cards.scryfall.io`, "normal" resolution, looked up by
-  `illustration_id` via `api.scryfall.com/cards/search`) when the local asset
-  isn't present, and a blank placeholder if that also fails. **Reverses the
-  previous "no CDN hotlinking, ever" decision** — see Phase 4 for the design.
+  CDN (`cards.scryfall.io`, "normal" resolution, via `api.scryfall.com`'s
+  direct `?format=image` redirect for the exact `scryfallId` printing) when
+  the local asset isn't present, and a blank placeholder if that also fails.
+  **Reverses the previous "no CDN hotlinking, ever" decision** — see Phase 4
+  for the design.
 - **Deliverable for this pass:** this plan document only. No code changes yet.
 
 ## Constraints verified
@@ -168,21 +169,29 @@ login` access to the repo.
 local asset if present, else a live lookup against Scryfall's CDN, else a
 blank placeholder.
 
-**Implemented.** `src/collection/card-image.ts`'s `getCardImageUrl(illustrationId)`
-is `async` and does the fallback itself: `HEAD`-checks the local, same-origin
-path (`${BASE_URL}art/<illustrationId>.jpg`, keyed by `illustrationId` to
-match `tools/build-hashdb.ts`'s art filenames, not `scryfallId`); if that
-404s, it looks up `illustration_id:<id>` on `api.scryfall.com/cards/search`
-(deduped/cached in-memory per illustration id, plus the browser's normal
-HTTP cache) and returns the Scryfall `normal`-size image URL; if neither
-source has the image it returns `undefined`, which the callers'
-`<img onerror>` handler turns into a blank `.card-thumb-blank` placeholder.
-Used by the two card-list renderers: `renderCardItem` (Collection view) and
+**Implemented.** `src/collection/card-image.ts`'s `getCardImageUrl(scryfallId)`
+is `async` and does the fallback itself: `HEAD`-checks the local,
+same-origin path (`${BASE_URL}art/<scryfallId>.jpg`); if that 404s (or 200s
+with non-image content, e.g. a dev-server/SPA-fallback response), it
+returns `https://api.scryfall.com/cards/<scryfallId>?format=image&version=border_crop`
+— a direct `302` redirect straight to that exact printing's `border_crop`-size
+image on `cards.scryfall.io`, with no JSON round-trip and no fetch/await
+needed on our side (the `<img>` element's own request follows the
+redirect). Keying both the local and remote lookups on `scryfallId` (rather
+than `illustrationId`) means the art always matches the *exact*
+printing/set a card entry points at — important when a user corrects a
+scanned match to a different printing that happens to share the same
+illustration. **Note:** `tools/build-hashdb.ts`'s art-pack file naming
+(`data/full_art/<illustrationId>.jpg`) still uses `illustrationId` — once
+option B below is actually built, that pipeline needs to switch its output
+filenames to `scryfallId` (or dedupe differently) to match. If `scryfallId`
+is missing it returns `undefined`, which the callers' `<img onerror>`
+handler turns into a blank `.card-thumb-blank` placeholder. Used by the two
+card-list renderers: `renderCardItem` (Collection view) and
 `renderStagedCard` (scan staging review) — both are now `async` themselves
 to `await` it. Since the actual local art pack (option B below) isn't built
 yet, every image currently falls straight through to the Scryfall fallback —
-that's
-expected until B ships.
+that's expected until B ships.
 
 The app previously displayed **no card images** at runtime — only the user's
 own captured/warped frame (`scanner-view.ts:804-816`, the match splash).
@@ -211,9 +220,14 @@ single packed blob + offset index mirroring the `hash-db.bin` approach) as
 Release-asset bandwidth is not counted against the Pages site quota). The app
 would offer an explicit "Download offline art (~Ν MB)" action, fetch shards
 with progress, and unpack into a Cache API bucket or an IndexedDB blob store
-at the `art/<illustrationId>.jpg` paths `card-image.ts` already requests —
-once unpacked, the existing `<img>` tags resolve automatically with no
-further UI change needed.
+at the `art/<scryfallId>.jpg` paths `card-image.ts` already requests — once
+unpacked, the existing `<img>` tags resolve automatically with no further
+UI change needed. (The dedup pipeline in `tools/download-art.ts`/
+`build-hashdb.ts` currently dedupes by `illustration_id` since that's what
+the hash matching needs; the art-pack output would need re-keying to
+`scryfallId` — meaning printings sharing an illustration are no longer
+deduped, i.e. closer to the full `data/full_art` size than the
+illustration-deduped 801 MB figure below.)
 - Re-encoding to WebP/AVIF at 146×204 should cut 801 MB to roughly
   300-400 MB.
 - Mobile storage quotas need explicit handling: iOS Safari caps origin
@@ -232,8 +246,8 @@ set.
 
 **Not started — extend the SW cache to the Scryfall fallback requests.**
 Today the only caching on the two live Scryfall requests `getCardImageUrl`
-makes (`api.scryfall.com/cards/search?...` and the `cards.scryfall.io`
-image itself) is the browser's native HTTP cache honoring Scryfall's
+makes (`api.scryfall.com/cards/<id>?format=image` and the `cards.scryfall.io`
+image it redirects to) is the browser's native HTTP cache honoring Scryfall's
 `Cache-Control: public, max-age=172800` (2 days) — no code in this repo is
 involved. `src/sw.ts` already has a `cacheFirst()` helper used for the hash
 DB and OpenCV WASM, but its fetch handler currently only intercepts

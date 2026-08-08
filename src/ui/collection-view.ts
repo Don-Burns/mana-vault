@@ -217,7 +217,7 @@ export function CollectionView(container: HTMLElement) {
       isSelected ? "selected" : ""
     }" data-card-id="${card.id}">
         <img class="card-thumb" crossorigin="anonymous" src="${await getCardImageUrl(
-      card.illustrationId,
+      card.scryfallId,
     )}" alt="" loading="lazy" onerror="this.classList.add('card-thumb-blank');this.removeAttribute('src')" />
         <div class="card-info">
           <span class="card-name">${escapeHtml(card.name)}</span>
