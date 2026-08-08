@@ -8,7 +8,7 @@
 import { connect } from "@tursodatabase/database-wasm/vite";
 import type { DatabasePromise as Database, Transaction } from "@tursodatabase/database-common";
 
-const DB_PATH = "mana-vault.db";
+export const DB_PATH = "mana-vault.db";
 
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS folders (
@@ -156,8 +156,47 @@ function cardFromRow(row: Record<string, unknown>): CardEntry {
   };
 }
 
+/**
+ * Read all folders/cards out of an already-open database handle.
+ * Driver-agnostic: works with any `Database`, live or scratch.
+ */
+async function readSnapshot(db: Database): Promise<{ folders: Folder[]; cards: CardEntry[] }> {
+  const folderRows = await db.all("SELECT * FROM folders ORDER BY sortOrder");
+  const cardRows = await db.all("SELECT * FROM cards");
+  return { folders: folderRows.map(folderFromRow), cards: cardRows.map(cardFromRow) };
+}
+
+/**
+ * Wipe and repopulate an already-open database handle with the given data.
+ * Driver-agnostic: works with any `Database`, live or scratch.
+ */
+async function writeSnapshot(
+  db: Database,
+  data: { folders: Folder[]; cards: CardEntry[] },
+): Promise<void> {
+  const txn = db.transactionAsync(async (tx: Transaction) => {
+    await tx.exec("DELETE FROM cards; DELETE FROM folders;");
+
+    for (const folder of data.folders) {
+      await tx.run(
+        `INSERT INTO folders (${FOLDER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?)`,
+        ...folderValues(folder),
+      );
+    }
+
+    for (const card of data.cards) {
+      await tx.run(
+        `INSERT INTO cards (${CARD_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ...cardValues(card),
+      );
+    }
+  });
+  await txn();
+}
+
 class CollectionStore {
   private db: Database | null = null;
+  private driver: TursoConnect = connect;
 
   /**
    * Open the database connection. Must be called before any operations.
@@ -168,6 +207,7 @@ class CollectionStore {
    *   driver (`@tursodatabase/database`), which shares the same API.
    */
   async open(path: string = DB_PATH, driver: TursoConnect = connect): Promise<void> {
+    this.driver = driver;
     try {
       this.db = await driver(path);
     } catch (err) {
@@ -175,17 +215,73 @@ class CollectionStore {
         `Failed to open database (it may be open in another tab): ${(err as Error).message}`,
       );
     }
-    await this.db.exec(SCHEMA);
+    await this.initSchema(this.db);
+  }
+
+  private async initSchema(db: Database): Promise<void> {
+    await db.exec(SCHEMA);
     // Guarded migration: add columns that didn't exist in earlier schema
     // versions. Ignored if already present (SQLite errors on duplicate ADD
     // COLUMN, which is expected on every open after the first).
     for (const stmt of MIGRATIONS) {
       try {
-        await this.db.exec(stmt);
+        await db.exec(stmt);
       } catch {
         // column already exists
       }
     }
+  }
+
+  /**
+   * Open a scratch database at `path` (using the same driver as the live
+   * store), run `fn` against it, then close it. Used to build/read
+   * standalone `.db` files for export/import without touching the live
+   * database. A second, concurrent OPFS-backed connection to a *different*
+   * file works fine alongside the live one (verified against the real
+   * WASM/OPFS driver in a browser, not just the Node driver tests run
+   * against) — the OPFS "Access Handles cannot be created if there is
+   * another open Access Handle" restriction only applies to reopening the
+   * *same* file twice, e.g. across a page reload (see the `pagehide`
+   * handler in main.ts).
+   *
+   * Runs a full WAL checkpoint before closing: the OPFS VFS always uses
+   * WAL journal mode (attempting `PRAGMA journal_mode=DELETE` is silently
+   * ignored there), so committed rows can sit in a separate `-wal` side
+   * file until checkpointed. Export/import only read/write the *main*
+   * filename as raw bytes (via plain OPFS file APIs), so without this a
+   * downloaded `.db` would contain just the schema and none of the actual
+   * rows — this is exactly the bug that made exportAsDB()/importFromDB()
+   * silently produce/read an empty collection in a real browser, even
+   * though the Node driver used in unit tests doesn't hit it.
+   */
+  private async withSnapshot<T>(path: string, fn: (db: Database) => Promise<T>): Promise<T> {
+    const db = await this.driver(path);
+    try {
+      await this.initSchema(db);
+      const result = await fn(db);
+      await db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+      return result;
+    } finally {
+      await db.close();
+    }
+  }
+
+  /**
+   * Write the current collection into a standalone SQLite file at `path`.
+   */
+  async exportToScratch(path: string): Promise<void> {
+    const data = await this.exportCollection();
+    await this.withSnapshot(path, (db) => writeSnapshot(db, data));
+  }
+
+  /**
+   * Read a standalone SQLite file at `path` and import its folders/cards
+   * into the live collection (replacing it).
+   */
+  async importFromScratch(path: string): Promise<{ folders: number; cards: number }> {
+    const data = await this.withSnapshot(path, readSnapshot);
+    await this.importCollection(data);
+    return { folders: data.folders.length, cards: data.cards.length };
   }
 
   // ─── Folder Operations ──────────────────────────────────────────────
@@ -467,30 +563,11 @@ class CollectionStore {
   // ─── Export / Import ────────────────────────────────────────────────
 
   async exportCollection(): Promise<{ folders: Folder[]; cards: CardEntry[] }> {
-    const folders = await this.getAllFolders();
-    const cards = await this.getAllCards();
-    return { folders, cards };
+    return readSnapshot(this.db!);
   }
 
   async importCollection(data: { folders: Folder[]; cards: CardEntry[] }): Promise<void> {
-    const txn = this.db!.transactionAsync(async (tx: Transaction) => {
-      await tx.exec("DELETE FROM cards; DELETE FROM folders;");
-
-      for (const folder of data.folders) {
-        await tx.run(
-          `INSERT INTO folders (${FOLDER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?)`,
-          ...folderValues(folder),
-        );
-      }
-
-      for (const card of data.cards) {
-        await tx.run(
-          `INSERT INTO cards (${CARD_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          ...cardValues(card),
-        );
-      }
-    });
-    await txn();
+    await writeSnapshot(this.db!, data);
   }
 
   // ─── Helpers ────────────────────────────────────────────────────────

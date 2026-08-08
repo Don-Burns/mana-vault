@@ -4,9 +4,8 @@ import {
   type Folder,
 } from "../collection/store.ts";
 import {
-  exportAsCSV,
-  exportAsJSON,
-  importFromJSON,
+  exportAsDB,
+  importFromDB,
 } from "../collection/export.ts";
 import { openMergeView } from "./merge-view.ts";
 import { localCardImageUrl } from "../collection/card-image.ts";
@@ -18,6 +17,7 @@ export function CollectionView(container: HTMLElement) {
   let currentFolderId: string | null = null;
   let selectedCardIds: Set<string> = new Set();
   let editMode = false;
+  let listenersAttached = false;
 
   el.innerHTML = `
     <div class="collection-header" id="collection-header">
@@ -57,7 +57,16 @@ export function CollectionView(container: HTMLElement) {
 
   function init() {
     renderFolderList();
-    setupEventListeners();
+    // App.showView() calls init() every time this tab is switched to (see
+    // main.ts), but the DOM here is only created once — re-running
+    // setupEventListeners() on every switch would stack duplicate
+    // listeners on the same buttons, so each click (e.g. Import) would
+    // fire multiple concurrent handlers and race each other, leaving the
+    // view showing stale data until a full page reload.
+    if (!listenersAttached) {
+      setupEventListeners();
+      listenersAttached = true;
+    }
   }
 
   function setupEventListeners() {
@@ -384,19 +393,24 @@ export function CollectionView(container: HTMLElement) {
   }
 
   async function handleExport() {
-    const format = prompt("Export format: json or csv", "json");
-    if (format === "csv") {
-      await exportAsCSV();
-    } else {
-      await exportAsJSON();
-    }
+    await exportAsDB();
   }
 
   async function handleImport() {
+    const cardCount = await collectionStore.getTotalCardCount();
+    if (
+      cardCount > 0 &&
+      !confirm(
+        `Importing will replace your entire collection (${cardCount} cards). Continue?`,
+      )
+    ) {
+      return;
+    }
+
     try {
-      const result = await importFromJSON();
-      alert(`Imported ${result.folders} folders and ${result.cards} cards.`);
+      const result = await importFromDB();
       await renderFolderList();
+      alert(`Imported database: ${result.folders} folders, ${result.cards} cards.`);
     } catch (err) {
       alert(`Import failed: ${(err as Error).message}`);
     }

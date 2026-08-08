@@ -1,105 +1,62 @@
 /**
  * Export/Import Module
  *
- * Handles exporting the collection to JSON/CSV and importing from JSON.
- * Preserves folder structure during export/import.
+ * Handles exporting the collection as a standalone SQLite-compatible `.db`
+ * file, and importing one back in (replacing the collection). The file is
+ * built/read via a scratch Turso connection (see `collectionStore.exportToScratch`
+ * / `importFromScratch`) and moved in/out of OPFS as raw bytes here.
  */
 
-import { collectionStore, type Folder, type CardEntry } from "./store.ts";
+import { collectionStore } from "./store.ts";
 
-export interface ExportData {
-  version: 1;
-  exportedAt: string;
-  folders: Folder[];
-  cards: CardEntry[];
+const DB_MIME_TYPE = "application/x-sqlite3";
+
+/**
+ * Export the entire collection as a downloadable SQLite `.db` file.
+ */
+export async function exportAsDB(): Promise<void> {
+  const scratchName = `export-${crypto.randomUUID()}.db`;
+  const root = await navigator.storage.getDirectory();
+
+  await collectionStore.exportToScratch(scratchName);
+  try {
+    const handle = await root.getFileHandle(scratchName);
+    const bytes = await (await handle.getFile()).arrayBuffer();
+    downloadFile(bytes, "mana-vault.db", DB_MIME_TYPE);
+  } finally {
+    await root.removeEntry(scratchName);
+  }
 }
 
 /**
- * Export the entire collection as a JSON file.
- */
-export async function exportAsJSON(): Promise<void> {
-  const { folders, cards } = await collectionStore.exportCollection();
-
-  const data: ExportData = {
-    version: 1,
-    exportedAt: new Date().toISOString(),
-    folders,
-    cards,
-  };
-
-  const json = JSON.stringify(data, null, 2);
-  downloadFile(json, "mtg-collection.json", "application/json");
-}
-
-/**
- * Export the collection as a CSV file.
- * Flattens folder structure into a column.
- */
-export async function exportAsCSV(): Promise<void> {
-  const { folders, cards } = await collectionStore.exportCollection();
-  const folderMap = new Map(folders.map((f) => [f.id, f.name]));
-
-  const headers = [
-    "Folder",
-    "Name",
-    "Set",
-    "Collector Number",
-    "Quantity",
-    "Condition",
-    "Notes",
-    "Scryfall ID",
-    "Date Added",
-  ];
-
-  const rows = cards.map((card) => [
-    folderMap.get(card.folderId) || "Unknown",
-    card.name,
-    card.setCode.toUpperCase(),
-    card.collectorNumber,
-    card.quantity.toString(),
-    card.condition,
-    card.notes,
-    card.scryfallId,
-    card.dateAdded,
-  ]);
-
-  const csv = [
-    headers.join(","),
-    ...rows.map((row) => row.map(escapeCSV).join(",")),
-  ].join("\n");
-
-  downloadFile(csv, "mtg-collection.csv", "text/csv");
-}
-
-/**
- * Import a collection from a JSON file.
+ * Import a collection from a SQLite `.db` file (replaces the collection).
  * Prompts the user to select a file.
  */
-export async function importFromJSON(): Promise<{ folders: number; cards: number }> {
-  const file = await selectFile(".json");
+export async function importFromDB(): Promise<{ folders: number; cards: number }> {
+  const file = await selectFile(".db,.sqlite,.sqlite3");
   if (!file) throw new Error("No file selected");
 
-  const text = await file.text();
-  const data: ExportData = JSON.parse(text);
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const scratchName = `import-${crypto.randomUUID()}.db`;
+  const root = await navigator.storage.getDirectory();
 
-  if (data.version !== 1) {
-    throw new Error(`Unsupported export version: ${data.version}`);
+  const handle = await root.getFileHandle(scratchName, { create: true });
+  const writable = await handle.createWritable();
+  await writable.write(bytes);
+  await writable.close();
+
+  try {
+    return await collectionStore.importFromScratch(scratchName);
+  } catch {
+    throw new Error("Not a valid Mana Vault collection database");
+  } finally {
+    await root.removeEntry(scratchName);
   }
-
-  await collectionStore.importCollection({
-    folders: data.folders,
-    cards: data.cards,
-  });
-
-  return {
-    folders: data.folders.length,
-    cards: data.cards.length,
-  };
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
-function downloadFile(content: string, filename: string, mimeType: string): void {
+function downloadFile(content: BlobPart, filename: string, mimeType: string): void {
   const blob = new Blob([content], { type: mimeType });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -119,11 +76,4 @@ function selectFile(accept: string): Promise<File | null> {
     };
     input.click();
   });
-}
-
-function escapeCSV(value: string): string {
-  if (value.includes(",") || value.includes('"') || value.includes("\n")) {
-    return `"${value.replace(/"/g, '""')}"`;
-  }
-  return value;
 }

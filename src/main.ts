@@ -1,6 +1,7 @@
 import { ScannerView } from "./ui/scanner-view.ts";
 import { CollectionView } from "./ui/collection-view.ts";
-import { collectionStore } from "./collection/store.ts";
+import { showToast } from "./ui/toast.ts";
+import { collectionStore, DB_PATH } from "./collection/store.ts";
 
 type ViewName = "scanner" | "collection";
 
@@ -65,6 +66,19 @@ async function ensureCrossOriginIsolated(): Promise<void> {
   location.reload();
 }
 
+// True if the collection database doesn't exist on disk yet (fresh install
+// or cleared storage), checked before `open()` creates it.
+async function isFirstRun(): Promise<boolean> {
+  if (!navigator.storage?.getDirectory) return false;
+  try {
+    const root = await navigator.storage.getDirectory();
+    await root.getFileHandle(DB_PATH);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 // Boot the app
 async function boot() {
   await ensureCrossOriginIsolated();
@@ -75,9 +89,15 @@ async function boot() {
     return;
   }
 
+  const firstRun = await isFirstRun();
+
   // Initialize the database
   await collectionStore.open();
   await collectionStore.ensureDefaultFolder();
+
+  if (firstRun) {
+    showToast("No existing collection found. Use Import to load a saved database.");
+  }
 
   // Note: the service worker is registered automatically by vite-plugin-pwa
   // (injectRegister: "auto"), which uses the correct worker URL in both dev
