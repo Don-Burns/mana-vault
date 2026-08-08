@@ -22,6 +22,9 @@ export function ScannerView(container: HTMLElement) {
   let detector: CardDetector | null = null;
   let metadata: CardMetadata | null = null;
   let isProcessing = false;
+  // True while the staging review overlay covers the camera feed — scans
+  // must not keep matching/adding cards to the list the user is reviewing.
+  let scanningPaused = false;
   let lastDetection: DetectionResult | null = null;
   /** The frame that produced `lastDetection`, kept so it can be identified. */
   let lastFrame: ImageData | null = null;
@@ -210,7 +213,11 @@ export function ScannerView(container: HTMLElement) {
   }
 
   async function processFrame(overlayCanvas: HTMLCanvasElement) {
-    if (!camera || !detector || !detector.isReady || isProcessing) return;
+    if (
+      !camera || !detector || !detector.isReady || isProcessing ||
+      scanningPaused
+    ) return;
+
     isProcessing = true;
 
     try {
@@ -443,11 +450,19 @@ export function ScannerView(container: HTMLElement) {
     overlay.innerHTML = reviewHtml;
     el.appendChild(overlay);
 
+    // Pause scanning while the overlay covers the camera feed — otherwise
+    // scans keep matching and mutating the list underneath the user.
+    scanningPaused = true;
+    const closeOverlay = () => {
+      scanningPaused = false;
+      overlay.remove();
+    };
+
     // Event handlers
     overlay.querySelector("#btn-close-staging")!.addEventListener(
       "click",
       () => {
-        overlay.remove();
+        closeOverlay();
       },
     );
 
@@ -455,7 +470,7 @@ export function ScannerView(container: HTMLElement) {
       "click",
       () => {
         staging.clear();
-        overlay.remove();
+        closeOverlay();
       },
     );
 
@@ -463,7 +478,7 @@ export function ScannerView(container: HTMLElement) {
       "click",
       async () => {
         await confirmStaging();
-        overlay.remove();
+        closeOverlay();
       },
     );
 
@@ -918,6 +933,7 @@ export function ScannerView(container: HTMLElement) {
       detector = null;
     }
     isProcessing = false;
+    scanningPaused = false;
     stableFrameCount = 0;
     lastCorners = null;
     lastDetection = null;
