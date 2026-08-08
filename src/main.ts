@@ -1,6 +1,7 @@
 import { ScannerView } from "./ui/scanner-view.ts";
 import { CollectionView } from "./ui/collection-view.ts";
 import { showToast } from "./ui/toast.ts";
+import { renderFooter } from "./ui/footer.ts";
 import { collectionStore, DB_PATH } from "./collection/store.ts";
 
 type ViewName = "scanner" | "collection";
@@ -114,6 +115,7 @@ async function boot() {
 
   // Start the app
   new App();
+  renderFooter();
 }
 
 if (document.readyState === "loading") {

@@ -1,12 +1,23 @@
 import { defineConfig } from "npm:vite";
 import { VitePWA } from "npm:vite-plugin-pwa";
 
+// Baked in at build time for the footer's version/published-at display.
+function gitInfo(format: string): string {
+  const cmd = new Deno.Command("git", { args: ["log", "-1", `--format=${format}`] });
+  const { stdout } = cmd.outputSync();
+  return new TextDecoder().decode(stdout).trim();
+}
+
 export default defineConfig({
   root: ".",
   publicDir: "public",
   // Root site by default; CI sets BASE_PATH based on the GitHub repo name
   // for the Pages project-site build.
   base: Deno.env.get("BASE_PATH") ?? "/",
+  define: {
+    __COMMIT_HASH__: JSON.stringify(gitInfo("%H")),
+    __COMMIT_DATE__: JSON.stringify(gitInfo("%cI")),
+  },
   plugins: [
     VitePWA({
       // We ship a hand-written service worker (src/sw.ts) with custom caching
