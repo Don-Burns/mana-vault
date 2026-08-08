@@ -17,8 +17,13 @@ import { ScanDedupTracker } from "./scan-dedup.ts";
 import { getCardImageUrl } from "../collection/card-image.ts";
 import { openMergeView } from "./merge-view.ts";
 import { showPrintingPicker } from "./printing-picker.ts";
+import { showToast } from "./toast.ts";
+import {
+  type MergeMode,
+  validateMergeSelection,
+} from "../collection/merge-validation.ts";
 
-type ScanMode = "add" | "remove" | "move";
+type ScanMode = MergeMode;
 
 export function ScannerView(container: HTMLElement) {
   const el = document.createElement("div");
@@ -397,10 +402,9 @@ export function ScannerView(container: HTMLElement) {
     // Replace main content with staging review
     const items = staging.getAll();
 
-    const confirmDisabled = mode === "move"
-      ? !destinationFolderId || !secondaryFolderId ||
-        destinationFolderId === secondaryFolderId
-      : !destinationFolderId;
+    const confirmDisabled =
+      validateMergeSelection(mode, destinationFolderId, secondaryFolderId) !==
+        null;
     const confirmLabel = mode === "add"
       ? "Add to Collection"
       : mode === "remove"
@@ -695,8 +699,16 @@ export function ScannerView(container: HTMLElement) {
   }
 
   async function confirmStaging() {
-    if (!destinationFolderId) return;
-    if (mode === "move" && !secondaryFolderId) return;
+    const error = validateMergeSelection(
+      mode,
+      destinationFolderId,
+      secondaryFolderId,
+    );
+    if (error) {
+      showToast(error);
+      return;
+    }
+    if (!destinationFolderId) return; // for type narrowing, validated above
 
     const items = staging.getAll();
 
@@ -777,6 +789,8 @@ export function ScannerView(container: HTMLElement) {
     const items = staging.getAll();
     const statusEl = el.querySelector<HTMLElement>("#scanner-status")!;
     let skipped = 0;
+    const destFolder = await collectionStore.getFolder(destinationFolderId);
+    const destName = destFolder?.name ?? "folder";
 
     if (mode === "add") {
       for (const item of items) {
@@ -797,8 +811,7 @@ export function ScannerView(container: HTMLElement) {
           rarity: item.rarity,
         });
       }
-      statusEl.textContent =
-        `Added ${staging.totalQuantity} card(s) to collection!`;
+      showToast(`Added ${staging.totalQuantity} card(s) to "${destName}"`);
     } else if (mode === "remove") {
       for (const item of items) {
         const entry = await resolveEntry(destinationFolderId, item);
@@ -814,12 +827,18 @@ export function ScannerView(container: HTMLElement) {
         }
       }
       const removedCount = items.length - skipped;
-      statusEl.textContent = skipped > 0
-        ? `Removed ${removedCount} card(s), ${skipped} skipped (not in folder)`
-        : `Removed ${removedCount} card(s) from collection!`;
+      showToast(
+        skipped > 0
+          ? `Removed ${removedCount} card(s) from "${destName}", ${skipped} skipped (not in folder)`
+          : `Removed ${removedCount} card(s) from "${destName}"`,
+      );
     } else {
       // move
       if (!secondaryFolderId) return;
+      const secondaryFolder = await collectionStore.getFolder(
+        secondaryFolderId,
+      );
+      const secondaryName = secondaryFolder?.name ?? "folder";
       for (const item of items) {
         const entry = await resolveEntry(destinationFolderId, item);
         if (!entry) {
@@ -833,16 +852,15 @@ export function ScannerView(container: HTMLElement) {
         );
       }
       const movedCount = items.length - skipped;
-      statusEl.textContent = skipped > 0
-        ? `Moved ${movedCount} card(s), ${skipped} skipped (not in folder)`
-        : `Moved ${movedCount} card(s) between collections!`;
+      showToast(
+        skipped > 0
+          ? `Moved ${movedCount} card(s) from "${destName}" to "${secondaryName}", ${skipped} skipped (not in folder)`
+          : `Moved ${movedCount} card(s) from "${destName}" to "${secondaryName}"`,
+      );
     }
 
     staging.clear();
-
-    setTimeout(() => {
-      statusEl.textContent = "Ready - point at a card";
-    }, 2000);
+    statusEl.textContent = "Ready - point at a card";
   }
 
   /**

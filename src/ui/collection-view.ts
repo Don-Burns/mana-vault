@@ -12,6 +12,7 @@ import {
 } from "../collection/card-search.ts";
 import { loadMetadata } from "../collection/metadata-loader.ts";
 import { showPrintingPicker } from "./printing-picker.ts";
+import { showToast } from "./toast.ts";
 export function CollectionView(container: HTMLElement) {
   const el = document.createElement("div");
   el.className = "view collection-view";
@@ -437,6 +438,12 @@ export function CollectionView(container: HTMLElement) {
       confirmLabel: "Move to Collection",
       onConfirm: async () => {
         await collectionStore.moveCards(cardIds, destFolderId);
+        const sourceName = el.querySelector("#folder-title")!.textContent ??
+          "folder";
+        const destName = select.selectedOptions[0]?.textContent ?? "folder";
+        showToast(
+          `Moved ${cardIds.length} card(s) from "${sourceName}" to "${destName}"`,
+        );
         selectedCardIds.clear();
         editMode = false;
         el.querySelector<HTMLButtonElement>("#btn-edit-mode")!.textContent =
