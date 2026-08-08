@@ -156,6 +156,13 @@ function processCard(
   cards: CardData[],
   seenIllustrations: Set<string>,
 ): void {
+  // Art Series cards ("Phyrexia: All Will Be One Art Series", etc.) share
+  // illustration_ids with the real card art but report a mangled
+  // "Name // Name" card.name (Scryfall models them as double-faced), which
+  // corrupts name lookups for that illustration group. Skip them entirely.
+  // Also messes with sorting since they have cmc=0 etc.
+  if (card.layout === "art_series") return;
+
   // Skip cards without illustration_id or image URIs
   if (!card.illustration_id || !card.image_uris?.art_crop) {
     // Check card_faces for double-faced cards
