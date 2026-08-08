@@ -557,14 +557,6 @@ class CollectionStore {
   }
 
   /**
-   * Get all unique illustration IDs in a folder (for scan-to-select matching).
-   */
-  async getIllustrationIdsInFolder(folderId: string): Promise<Set<string>> {
-    const cards = await this.getCardsByFolder(folderId);
-    return new Set(cards.map((c) => c.illustrationId));
-  }
-
-  /**
    * Get all cards across all folders.
    */
   async getAllCards(): Promise<CardEntry[]> {

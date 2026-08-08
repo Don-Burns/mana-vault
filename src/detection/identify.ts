@@ -34,7 +34,6 @@ import {
 import { computeHashesFromImageData } from "../matching/hasher.ts";
 import {
   findMatches,
-  findMatchesInSubset,
   type HashSpace,
   type MatchResult,
 } from "../matching/matcher.ts";
@@ -94,22 +93,6 @@ export function matchCardCandidates(
   );
 }
 
-/**
- * Like {@link matchCardCandidates}, but restricts the search to a subset of
- * illustration IDs (e.g. the cards in a specific folder for scan-to-select).
- */
-export function matchCardCandidatesInSubset(
-  db: HashDB,
-  candidates: CardCandidate[],
-  illustrationIds: Set<string>,
-): CandidateMatch | null {
-  return searchCandidates(
-    candidates,
-    (pHash, dHash, space) =>
-      findMatchesInSubset(db, pHash, dHash, illustrationIds, 1, space),
-  );
-}
-
 /** Shared candidate sweep; `search` supplies the database lookup. */
 function searchCandidates(
   candidates: CardCandidate[],
@@ -143,17 +126,12 @@ function searchCandidates(
  * Full identification from a source image Mat: detect the card, hash every
  * candidate view of it, and return the best database match.
  *
- * When `illustrationIds` is supplied the search is restricted to those
- * illustrations (scan-to-select within a folder); otherwise the whole database
- * is searched.
- *
  * Handles cleanup of all intermediate Mats internally.
  */
 export function identifyCardInMat(
   cv: Cv,
   src: Mat,
   db: HashDB,
-  illustrationIds?: Set<string>,
 ): IdentifyResult {
   const detection = detectCardInMat(cv, src);
 
@@ -167,9 +145,7 @@ export function identifyCardInMat(
 
   try {
     const candidates = extractCardCandidates(cv, detection.cardMat);
-    const best = illustrationIds
-      ? matchCardCandidatesInSubset(db, candidates, illustrationIds)
-      : matchCardCandidates(db, candidates);
+    const best = matchCardCandidates(db, candidates);
 
     if (!best) {
       return {

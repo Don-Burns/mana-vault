@@ -138,14 +138,8 @@ export class CardDetector {
    * Identify the card in the given frame against the hash database. Much more
    * expensive than {@link detect}, so call it only once a card has been
    * detected and held steady.
-   *
-   * @param illustrationIds - Restrict matching to these illustrations
-   *   (scan-to-select within a folder).
    */
-  async identify(
-    imageData: ImageData,
-    illustrationIds?: Set<string>,
-  ): Promise<IdentifyResult> {
+  async identify(imageData: ImageData): Promise<IdentifyResult> {
     if (this.state !== "ready") {
       return { matched: false, detected: false };
     }
@@ -158,7 +152,6 @@ export class CardDetector {
         type: "identify",
         imageData,
         frameId,
-        illustrationIds,
       });
     });
   }

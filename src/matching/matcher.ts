@@ -131,61 +131,6 @@ export function findMatches(
 }
 
 /**
- * Find matches within a subset of the database (e.g., cards in a specific folder).
- * Used for scan-to-select mode.
- *
- * @param db - The loaded hash database
- * @param queryPHash - pHash of the scanned image
- * @param queryDHash - dHash of the scanned image
- * @param illustrationIds - Set of illustration IDs to search within
- * @param topN - Number of results to return
- * @param space - Which hash space the query was computed in (default "art")
- */
-export function findMatchesInSubset(
-  db: HashDB,
-  queryPHash: bigint,
-  queryDHash: bigint,
-  illustrationIds: Set<string>,
-  topN = 5,
-  space: HashSpace = "art",
-): MatchResult[] {
-  if (space === "full" && !db.hasFullCardHashes) return [];
-
-  const { pHashes, dHashes, pHashHighs, pHashLows, dHashHighs, dHashLows } =
-    hashArrays(db, space);
-  const size = db.size;
-  const queryPHigh = Number(queryPHash >> 32n) >>> 0;
-  const queryPLow = Number(queryPHash & 0xFFFF_FFFFn) >>> 0;
-  const queryDHigh = Number(queryDHash >> 32n) >>> 0;
-  const queryDLow = Number(queryDHash & 0xFFFF_FFFFn) >>> 0;
-  const results: MatchResult[] = [];
-
-  for (let i = 0; i < size; i++) {
-    const id = db.getIllustrationId(i);
-    if (!illustrationIds.has(id)) continue;
-    if (pHashes[i] === 0n && dHashes[i] === 0n) continue;
-
-    const pDist = popcount32(queryPHigh ^ pHashHighs[i]) +
-      popcount32(queryPLow ^ pHashLows[i]);
-    const dDist = popcount32(queryDHigh ^ dHashHighs[i]) +
-      popcount32(queryDLow ^ dHashLows[i]);
-    const combined = pDist * 0.6 + dDist * 0.4;
-
-    results.push({
-      illustrationId: id,
-      index: i,
-      pHashDistance: pDist,
-      dHashDistance: dDist,
-      combinedScore: combined,
-      confidence: scoreToConfidence(combined),
-    });
-  }
-
-  results.sort((a, b) => a.combinedScore - b.combinedScore);
-  return results.slice(0, topN);
-}
-
-/**
  * Count set bits in a 32-bit integer.
  *
  * Uses a classic SWAR popcount (Hacker's Delight) with only integer ops,

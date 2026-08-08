@@ -66,8 +66,6 @@ export interface IdentifyCardMessage {
   type: "identify";
   imageData: ImageData;
   frameId: number;
-  /** Restrict matching to these illustrations (scan-to-select within a folder). */
-  illustrationIds?: Set<string>;
 }
 
 export interface DetectResultMessage {
@@ -95,9 +93,7 @@ self.onmessage = (e: MessageEvent) => {
   if (msg.type === "detect") {
     self.postMessage(detectCard(cv, msg.imageData, msg.frameId));
   } else if (msg.type === "identify") {
-    self.postMessage(
-      identifyCard(cv, msg.imageData, msg.frameId, msg.illustrationIds),
-    );
+    self.postMessage(identifyCard(cv, msg.imageData, msg.frameId));
   }
 };
 
@@ -137,7 +133,6 @@ function identifyCard(
   cv: Cv,
   imageData: ImageData,
   frameId: number,
-  illustrationIds?: Set<string>,
 ): IdentifyResultMessage {
   if (!db) {
     return {
@@ -154,7 +149,7 @@ function identifyCard(
     return {
       type: "identify-result",
       frameId,
-      ...identifyCardInMat(cv, src, db, illustrationIds),
+      ...identifyCardInMat(cv, src, db),
     };
   } finally {
     src.delete();

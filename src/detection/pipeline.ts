@@ -154,10 +154,9 @@ export function detectCardInMat(cv: Cv, src: Mat): PipelineResult {
 /**
  * Collect all convex, card-shaped quadrilateral contours into `out`.
  *
- * Unlike {@link findCardContour} (which returns only the single largest
- * match), this gathers every plausible card quad so the caller can decide
- * between them — e.g. to prefer a small card nested inside a larger bright
- * quad such as a sheet of paper.
+ * Gathers every plausible card quad so the caller can decide between them —
+ * e.g. to prefer a small card nested inside a larger bright quad such as a
+ * sheet of paper.
  */
 export function collectCardQuads(
   cv: Cv,
@@ -303,58 +302,6 @@ export function selectCardQuad(
   // Otherwise fall back to the largest card-shaped quad.
   withArea.sort((a, b) => b.area - a.area);
   return withArea[0].points;
-}
-
-/**
- * Find the largest quadrilateral contour that could be a card.
- * MTG cards have aspect ratio ~2.5:3.5 (≈ 0.714).
- *
- * @deprecated Prefer {@link collectCardQuads} + {@link selectCardQuad}, which
- * also handle cards nested inside a larger bright quad. Retained for callers
- * that only need the single largest match.
- */
-export function findCardContour(
-  cv: Cv,
-  contours: MatVector,
-  frameWidth: number,
-  frameHeight: number,
-): [number, number][] | null {
-  const frameArea = frameWidth * frameHeight;
-  const minCardArea = frameArea * 0.05;
-  const maxCardArea = frameArea * 0.95;
-
-  let bestContour: [number, number][] | null = null;
-  let bestArea = 0;
-
-  for (let i = 0; i < contours.size(); i++) {
-    const contour = contours.get(i);
-    const area = cv.contourArea(contour);
-
-    if (area < minCardArea || area > maxCardArea) {
-      contour.delete();
-      continue;
-    }
-
-    const peri = cv.arcLength(contour, true);
-    const approx = new cv.Mat();
-    cv.approxPolyDP(contour, approx, 0.02 * peri, true);
-
-    if (approx.rows === 4) {
-      const isConvex = cv.isContourConvex(approx);
-      if (isConvex && area > bestArea) {
-        const points = matToPoints(approx);
-        if (isCardShaped(points)) {
-          bestArea = area;
-          bestContour = points;
-        }
-      }
-    }
-
-    approx.delete();
-    contour.delete();
-  }
-
-  return bestContour;
 }
 
 // ---------------------------------------------------------------------------
