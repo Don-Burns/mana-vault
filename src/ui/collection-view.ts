@@ -24,6 +24,7 @@ export function CollectionView(container: HTMLElement) {
   let editMode = false;
   let listenersAttached = false;
   let metadata: CardMetadata | null = null;
+  let searchQuery = "";
 
   el.innerHTML = `
     <div class="collection-header" id="collection-header">
@@ -43,6 +44,7 @@ export function CollectionView(container: HTMLElement) {
           <button class="btn-sm" id="btn-edit-mode">Edit</button>
         </div>
       </div>
+      <input type="text" id="card-search-input" class="card-search-input" placeholder="Search cards by name..." />
       <div class="card-list" id="card-list"></div>
       <div class="selection-bar hidden" id="selection-bar">
         <span id="selection-count">0 selected</span>
@@ -104,6 +106,13 @@ export function CollectionView(container: HTMLElement) {
     el.querySelector("#btn-move-confirm")!.addEventListener(
       "click",
       confirmMove,
+    );
+    el.querySelector<HTMLInputElement>("#card-search-input")!.addEventListener(
+      "input",
+      (event) => {
+        searchQuery = (event.target as HTMLInputElement).value;
+        renderCardList(currentFolderId!);
+      },
     );
   }
 
@@ -180,6 +189,8 @@ export function CollectionView(container: HTMLElement) {
     currentFolderId = folderId;
     selectedCardIds.clear();
     editMode = false;
+    searchQuery = "";
+    el.querySelector<HTMLInputElement>("#card-search-input")!.value = "";
 
     const folder = await collectionStore.getFolder(folderId);
     if (!folder) return;
@@ -191,12 +202,19 @@ export function CollectionView(container: HTMLElement) {
   }
 
   async function renderCardList(folderId: string) {
-    const cards = await collectionStore.getCardsByFolder(folderId);
+    const allCards = await collectionStore.getCardsByFolder(folderId);
+    const query = searchQuery.trim().toLowerCase();
+    const cards = query
+      ? allCards.filter((c) => c.name.toLowerCase().includes(query))
+      : allCards;
     const listEl = el.querySelector("#card-list")!;
 
     if (cards.length === 0) {
-      listEl.innerHTML =
-        `<div class="empty-state">No cards in this folder.<br>Scan some cards to add them!</div>`;
+      listEl.innerHTML = allCards.length === 0
+        ? `<div class="empty-state">No cards in this folder.<br>Scan some cards to add them!</div>`
+        : `<div class="empty-state">No cards match "${
+          escapeHtml(searchQuery)
+        }".</div>`;
       return;
     }
 

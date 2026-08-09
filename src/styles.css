@@ -523,13 +523,19 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
-.staging-search-input {
+.staging-search-input,
+.card-search-input {
   width: 100%;
   padding: 0.5rem 0.75rem;
   border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--bg-card);
   color: inherit;
+}
+
+.card-search-input {
+  margin: 0.5rem 1rem;
+  width: calc(100% - 2rem);
 }
 
 .staging-search-results {
