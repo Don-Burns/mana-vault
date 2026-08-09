@@ -745,19 +745,27 @@ export function ScannerView(container: HTMLElement) {
     const destName = destFolder?.name ?? "folder";
 
     if (mode === "add") {
-      await collectionStore.commitAdd(destinationFolderId, items);
+      await collectionStore.commitAdd(destinationFolderId, items).catch(
+        (err) => {
+          showToast(`Failed to add cards: ${err.message}`);
+          throw err;
+        },
+      );
       showToast(`Added ${staging.totalQuantity} card(s) to "${destName}"`);
     } else if (mode === "remove") {
       const { applied, skipped } = await collectionStore.commitRemove(
         destinationFolderId,
         items,
-      );
+      ).catch((err) => {
+        showToast(`Failed to remove cards: ${err.message}`);
+        throw err;
+      });
       showToast(
         skipped > 0
           ? `Removed ${applied} card(s) from "${destName}", ${skipped} skipped (not in folder)`
           : `Removed ${applied} card(s) from "${destName}"`,
       );
-    } else {
+    } else if (mode === "move") {
       // move
       if (!secondaryFolderId) return;
       const secondaryFolder = await collectionStore.getFolder(
@@ -768,12 +776,18 @@ export function ScannerView(container: HTMLElement) {
         destinationFolderId,
         secondaryFolderId,
         items,
-      );
+      ).catch((err) => {
+        showToast(`Failed to move cards: ${err.message}`);
+        throw err;
+      });
       showToast(
         skipped > 0
           ? `Moved ${applied} card(s) from "${destName}" to "${secondaryName}", ${skipped} skipped (not in folder)`
           : `Moved ${applied} card(s) from "${destName}" to "${secondaryName}"`,
       );
+    } else {
+      showToast(`Unknown mode: ${mode}`);
+      throw new Error(`Unknown mode: ${mode}`);
     }
 
     staging.clear();

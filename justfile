@@ -22,4 +22,4 @@ test:
     deno task test:e2e
 
 search-db-by-name CARD_NAME:
-    jq '.illustrations | to_entries[] | select(.value.name | test("{{CARD_NAME}}")) | {id: .key, name: .value.name, printings: (.value.printings | length)}' data/output/metadata.json
+    jq '.illustrations | to_entries[] | select(.value.name == "{{CARD_NAME}}")' data/output/metadata.json
