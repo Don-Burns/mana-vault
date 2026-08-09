@@ -19,3 +19,4 @@ preview: build
 # Run the test suite
 test:
     deno task test
+    deno task test:e2e
