@@ -4,6 +4,7 @@ import {
   type Folder,
 } from "../collection/store.ts";
 import { exportAsDB, importFromDB } from "../collection/export.ts";
+import { computeDiff, simulateAdd } from "../collection/diff.ts";
 import { openMergeView } from "./merge-view.ts";
 import { getCardImageUrl } from "../collection/card-image.ts";
 import {
@@ -418,15 +419,10 @@ export function CollectionView(container: HTMLElement) {
     // Full move: each selected entry's whole quantity relocates (matches
     // moveCards, which moves without a partial-quantity argument).
     const sourceAfter = sourceCards.filter((c) => !cardIds.includes(c.id));
-    const destAfter = destCards.map((c) => ({ ...c }));
-    for (const card of moving) {
-      const existing = destAfter.find((c) => c.scryfallId === card.scryfallId);
-      if (existing) {
-        existing.quantity += card.quantity;
-      } else {
-        destAfter.push({ ...card, folderId: destFolderId });
-      }
-    }
+    const destAfter = simulateAdd(destCards, moving, (card) => ({
+      ...card,
+      folderId: destFolderId,
+    }));
 
     openMergeView({
       container: el,
@@ -437,7 +433,10 @@ export function CollectionView(container: HTMLElement) {
       ],
       confirmLabel: "Move to Collection",
       onConfirm: async () => {
-        await collectionStore.moveCards(cardIds, destFolderId);
+        await collectionStore.applyCardDiffs([
+          { folderId: currentFolderId!, diff: computeDiff(sourceCards, sourceAfter) },
+          { folderId: destFolderId, diff: computeDiff(destCards, destAfter) },
+        ]);
         const sourceName = el.querySelector("#folder-title")!.textContent ??
           "folder";
         const destName = select.selectedOptions[0]?.textContent ?? "folder";

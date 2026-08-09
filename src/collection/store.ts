@@ -10,6 +10,14 @@ import type {
   DatabasePromise as Database,
   Transaction,
 } from "@tursodatabase/database-common";
+import {
+  clampToSource,
+  computeDiff,
+  type DiffRow,
+  findMatch,
+  simulateAdd,
+  simulateRemove,
+} from "./diff.ts";
 
 export const DB_PATH = "mana-vault.db";
 
@@ -89,42 +97,52 @@ export interface CardEntry {
   rarity?: string;
 }
 
+/** A staged card's fields, independent of which folder it lands in. */
+export type StagingItem = Omit<
+  CardEntry,
+  "id" | "folderId" | "dateAdded" | "notes"
+>;
+
 type TursoConnect = (path: string) => Promise<Database>;
 
 const FOLDER_COLUMNS = "id, name, color, sortOrder, createdAt, isDefault";
+const FOLDER_VALUES =
+  "(:id, :name, :color, :sortOrder, :createdAt, :isDefault)";
 const CARD_COLUMNS =
   "id, folderId, scryfallId, illustrationId, oracleId, name, setCode, setName, collectorNumber, quantity, condition, notes, dateAdded, cmc, colors, rarity";
+const CARD_VALUES =
+  "(:id, :folderId, :scryfallId, :illustrationId, :oracleId, :name, :setCode, :setName, :collectorNumber, :quantity, :condition, :notes, :dateAdded, :cmc, :colors, :rarity)";
 
-function folderValues(folder: Folder): unknown[] {
-  return [
-    folder.id,
-    folder.name,
-    folder.color,
-    folder.sortOrder,
-    folder.createdAt,
-    folder.isDefault ? 1 : 0,
-  ];
+function folderParams(folder: Folder): Record<string, unknown> {
+  return {
+    id: folder.id,
+    name: folder.name,
+    color: folder.color,
+    sortOrder: folder.sortOrder,
+    createdAt: folder.createdAt,
+    isDefault: folder.isDefault ? 1 : 0,
+  };
 }
 
-function cardValues(card: CardEntry): unknown[] {
-  return [
-    card.id,
-    card.folderId,
-    card.scryfallId,
-    card.illustrationId,
-    card.oracleId,
-    card.name,
-    card.setCode,
-    card.setName,
-    card.collectorNumber,
-    card.quantity,
-    card.condition,
-    card.notes,
-    card.dateAdded,
-    card.cmc ?? null,
-    card.colors ? JSON.stringify(card.colors) : null,
-    card.rarity ?? null,
-  ];
+function cardParams(card: CardEntry): Record<string, unknown> {
+  return {
+    id: card.id,
+    folderId: card.folderId,
+    scryfallId: card.scryfallId,
+    illustrationId: card.illustrationId,
+    oracleId: card.oracleId,
+    name: card.name,
+    setCode: card.setCode,
+    setName: card.setName,
+    collectorNumber: card.collectorNumber,
+    quantity: card.quantity,
+    condition: card.condition,
+    notes: card.notes,
+    dateAdded: card.dateAdded,
+    cmc: card.cmc ?? null,
+    colors: card.colors ? JSON.stringify(card.colors) : null,
+    rarity: card.rarity ?? null,
+  };
 }
 
 function folderFromRow(row: Record<string, unknown>): Folder {
@@ -187,15 +205,15 @@ async function writeSnapshot(
 
     for (const folder of data.folders) {
       await tx.run(
-        `INSERT INTO folders (${FOLDER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?)`,
-        ...folderValues(folder),
+        `INSERT INTO folders (${FOLDER_COLUMNS}) VALUES ${FOLDER_VALUES}`,
+        folderParams(folder),
       );
     }
 
     for (const card of data.cards) {
       await tx.run(
-        `INSERT INTO cards (${CARD_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ...cardValues(card),
+        `INSERT INTO cards (${CARD_COLUMNS}) VALUES ${CARD_VALUES}`,
+        cardParams(card),
       );
     }
   });
@@ -333,7 +351,10 @@ class CollectionStore {
   }
 
   async getFolder(id: string): Promise<Folder | undefined> {
-    const row = await this.db!.get("SELECT * FROM folders WHERE id = ?", id);
+    const row = await this.db!.get(
+      "SELECT * FROM folders WHERE id = :id",
+      { id },
+    );
     return row ? folderFromRow(row) : undefined;
   }
 
@@ -356,11 +377,11 @@ class CollectionStore {
   async putFolder(folder: Folder): Promise<void> {
     await this.db!.run(
       `INSERT INTO folders (${FOLDER_COLUMNS})
-       VALUES (?, ?, ?, ?, ?, ?)
+       VALUES ${FOLDER_VALUES}
        ON CONFLICT(id) DO UPDATE SET
          name = excluded.name, color = excluded.color, sortOrder = excluded.sortOrder,
          createdAt = excluded.createdAt, isDefault = excluded.isDefault`,
-      ...folderValues(folder),
+      folderParams(folder),
     );
   }
 
@@ -369,7 +390,7 @@ class CollectionStore {
     if (cards.length > 0) {
       throw new Error("Cannot delete a folder that still contains cards");
     }
-    await this.db!.run("DELETE FROM folders WHERE id = ?", id);
+    await this.db!.run("DELETE FROM folders WHERE id = :id", { id });
   }
 
   async renameFolder(id: string, newName: string): Promise<void> {
@@ -394,8 +415,8 @@ class CollectionStore {
 
   async getFolderCardCount(folderId: string): Promise<number> {
     const row = await this.db!.get(
-      "SELECT COUNT(*) as count FROM cards WHERE folderId = ?",
-      folderId,
+      "SELECT COUNT(*) as count FROM cards WHERE folderId = :folderId",
+      { folderId },
     );
     return (row?.count as number) ?? 0;
   }
@@ -404,77 +425,24 @@ class CollectionStore {
 
   async getCardsByFolder(folderId: string): Promise<CardEntry[]> {
     const rows = await this.db!.all(
-      "SELECT * FROM cards WHERE folderId = ?",
-      folderId,
+      "SELECT * FROM cards WHERE folderId = :folderId",
+      { folderId },
     );
     return rows.map(cardFromRow);
   }
 
   async getCard(id: string): Promise<CardEntry | undefined> {
-    const row = await this.db!.get("SELECT * FROM cards WHERE id = ?", id);
-    return row ? cardFromRow(row) : undefined;
-  }
-
-  /**
-   * Find a card in a specific folder by its Scryfall ID (exact printing match).
-   */
-  async findCardInFolder(
-    folderId: string,
-    scryfallId: string,
-  ): Promise<CardEntry | undefined> {
     const row = await this.db!.get(
-      "SELECT * FROM cards WHERE folderId = ? AND scryfallId = ?",
-      folderId,
-      scryfallId,
+      "SELECT * FROM cards WHERE id = :id",
+      { id },
     );
     return row ? cardFromRow(row) : undefined;
-  }
-
-  /**
-   * Find a card in a specific folder by illustration ID (any printing of the
-   * same artwork). Used as a fallback when the exact printing scanned isn't
-   * the one already in the folder.
-   */
-  async findCardInFolderByIllustration(
-    folderId: string,
-    illustrationId: string,
-  ): Promise<CardEntry | undefined> {
-    const cards = await this.getCardsByFolder(folderId);
-    return cards.find((c) => c.illustrationId === illustrationId);
-  }
-
-  /**
-   * Add a card to a folder. If the same printing already exists in the folder,
-   * increment the quantity instead.
-   */
-  async addCard(card: Omit<CardEntry, "id" | "dateAdded">): Promise<CardEntry> {
-    // Check if this exact printing already exists in the folder
-    const existing = await this.findCardInFolder(
-      card.folderId,
-      card.scryfallId,
-    );
-
-    if (existing) {
-      existing.quantity += card.quantity;
-      await this.putCard(existing);
-      return existing;
-    }
-
-    const newCard: CardEntry = {
-      ...card,
-      id: crypto.randomUUID(),
-      dateAdded: new Date().toISOString(),
-    };
-
-    await this.putCard(newCard);
-    return newCard;
   }
 
   async putCard(card: CardEntry): Promise<void> {
-    this.db?.batch;
     await this.db!.run(
       `INSERT INTO cards (${CARD_COLUMNS})
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       VALUES ${CARD_VALUES}
        ON CONFLICT(id) DO UPDATE SET
           folderId = excluded.folderId
           , scryfallId = excluded.scryfallId
@@ -491,83 +459,130 @@ class CollectionStore {
           , cmc = excluded.cmc
           , colors = excluded.colors
           , rarity = excluded.rarity`,
-      ...cardValues(card),
+      cardParams(card),
     );
   }
 
   async deleteCard(id: string): Promise<void> {
-    await this.db!.run("DELETE FROM cards WHERE id = ?", id);
+    await this.db!.run("DELETE FROM cards WHERE id = :id", { id });
+  }
+
+  // ─── Staging Commit ─────────────────────────────────────────────────
+  //
+  // Each of these fetches the affected folder(s) once, computes the
+  // resulting rows in memory (no per-item SELECT), then applies every
+  // INSERT/UPDATE/DELETE as a single transaction via `applyCardDiffs`.
+
+  /**
+   * Add a batch of staged items to a folder (merging quantity into any
+   * matching existing printing).
+   */
+  async commitAdd(
+    folderId: string,
+    items: readonly StagingItem[],
+  ): Promise<{ applied: number }> {
+    const before = await this.getCardsByFolder(folderId);
+    const after = simulateAdd(before, items, (item) => ({
+      ...item,
+      id: crypto.randomUUID(),
+      folderId,
+      notes: "",
+      dateAdded: new Date().toISOString(),
+    }));
+
+    await this.applyCardDiffs([
+      { folderId, diff: computeDiff(before, after) },
+    ]);
+    return { applied: items.length };
   }
 
   /**
-   * Move a quantity of a card from one folder to another.
-   * If the quantity covers the full amount, the entry is removed from source.
-   * If the destination already has the same printing, quantities are merged.
+   * Remove a batch of staged items' quantities from a folder. Items with no
+   * matching card in the folder are skipped.
    */
-  async moveCard(
-    cardId: string,
+  async commitRemove(
+    folderId: string,
+    items: readonly StagingItem[],
+  ): Promise<{ applied: number; skipped: number }> {
+    const before = await this.getCardsByFolder(folderId);
+    const after = simulateRemove(before, items);
+    const skipped = items.filter((item) => !findMatch(before, item)).length;
+
+    await this.applyCardDiffs([
+      { folderId, diff: computeDiff(before, after) },
+    ]);
+    return { applied: items.length - skipped, skipped };
+  }
+
+  /**
+   * Move a batch of staged items' quantities from one folder to another.
+   * Items with no matching card in the source folder are skipped; the
+   * amount moved is capped at what the source entry actually has.
+   */
+  async commitMove(
+    sourceFolderId: string,
     destinationFolderId: string,
-    quantity?: number,
-  ): Promise<void> {
-    const card = await this.getCard(cardId);
-    if (!card) throw new Error(`Card not found: ${cardId}`);
+    items: readonly StagingItem[],
+  ): Promise<{ applied: number; skipped: number }> {
+    const sourceBefore = await this.getCardsByFolder(sourceFolderId);
+    const destBefore = await this.getCardsByFolder(destinationFolderId);
 
-    const moveQty = quantity ?? card.quantity;
-    if (moveQty > card.quantity) {
-      throw new Error(
-        `Cannot move ${moveQty}, only ${card.quantity} available`,
-      );
-    }
+    // Resolve + clamp each item against what the source folder actually
+    // has, using the matched entry's own fields (it may be a different
+    // printing of the same illustration than what was staged).
+    const clamped = clampToSource(sourceBefore, items);
+    const skipped = items.length - clamped.length;
 
-    // Check if destination already has this printing
-    const existing = await this.findCardInFolder(
-      destinationFolderId,
-      card.scryfallId,
-    );
+    const sourceAfter = simulateRemove(sourceBefore, clamped);
+    const destAfter = simulateAdd(destBefore, clamped, (item) => ({
+      ...item,
+      id: crypto.randomUUID(),
+      folderId: destinationFolderId,
+      dateAdded: new Date().toISOString(),
+    }));
 
-    if (existing) {
-      // Merge into existing entry
-      existing.quantity += moveQty;
-      await this.putCard(existing);
-    } else {
-      // Create new entry in destination
-      await this.addCard({
+    await this.applyCardDiffs([
+      { folderId: sourceFolderId, diff: computeDiff(sourceBefore, sourceAfter) },
+      {
         folderId: destinationFolderId,
-        scryfallId: card.scryfallId,
-        illustrationId: card.illustrationId,
-        oracleId: card.oracleId,
-        name: card.name,
-        setCode: card.setCode,
-        setName: card.setName,
-        collectorNumber: card.collectorNumber,
-        quantity: moveQty,
-        condition: card.condition,
-        notes: card.notes,
-        cmc: card.cmc,
-        colors: card.colors,
-        rarity: card.rarity,
-      });
-    }
-
-    // Update or remove source
-    if (moveQty >= card.quantity) {
-      await this.deleteCard(cardId);
-    } else {
-      card.quantity -= moveQty;
-      await this.putCard(card);
-    }
+        diff: computeDiff(destBefore, destAfter),
+      },
+    ]);
+    return { applied: items.length - skipped, skipped };
   }
 
   /**
-   * Move multiple cards to a destination folder.
+   * Apply precomputed before/after diffs for one or more folders as a
+   * single atomic transaction: one INSERT/UPDATE/DELETE per changed row,
+   * no per-row SELECT (the diff already encodes what changed).
    */
-  async moveCards(
-    cardIds: string[],
-    destinationFolderId: string,
+  async applyCardDiffs(
+    diffs: { folderId: string; diff: DiffRow<CardEntry>[] }[],
   ): Promise<void> {
-    for (const id of cardIds) {
-      await this.moveCard(id, destinationFolderId);
-    }
+    const txn = this.db!.transactionAsync(async (tx: Transaction) => {
+      for (const { folderId, diff } of diffs) {
+        for (const row of diff) {
+          if (row.kind === "unchanged") continue;
+          if (row.kind === "removed") {
+            await tx.run(
+              "DELETE FROM cards WHERE id = :id",
+              { id: row.card.id },
+            );
+          } else if (row.kind === "added") {
+            await tx.run(
+              `INSERT INTO cards (${CARD_COLUMNS}) VALUES ${CARD_VALUES}`,
+              cardParams({ ...row.card, folderId, quantity: row.after }),
+            );
+          } else {
+            await tx.run(
+              "UPDATE cards SET quantity = :quantity WHERE id = :id",
+              { quantity: row.after, id: row.card.id },
+            );
+          }
+        }
+      }
+    });
+    await txn();
   }
 
   /**
@@ -590,7 +605,7 @@ class CollectionStore {
 
   // ─── Export / Import ────────────────────────────────────────────────
 
-  async exportCollection(): Promise<{ folders: Folder[]; cards: CardEntry[] }> {
+  exportCollection(): Promise<{ folders: Folder[]; cards: CardEntry[] }> {
     return readSnapshot(this.db!);
   }
 

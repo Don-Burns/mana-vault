@@ -243,3 +243,11 @@ folder contents" and "contents after applying the pending operation":
 - Any backend/IndexedDB→Turso concerns (`docs/plans/turso_collection_db.md`
   is a separate, orthogonal plan — `CardEntry` field additions here apply
   regardless of which backend lands first).
+
+## Post-implementation note
+This plan predates a later perf refactor: `addCard`/`moveCard`/`moveCards`
+(referenced above) were replaced by `commitAdd`/`commitRemove`/`commitMove`
+(`store.ts`) and a shared `applyCardDiffs` transaction, using diff logic from
+`src/collection/diff.ts` — the same diff computation this doc describes for
+the merge viewer's preview is now reused for the actual commit, so preview
+and commit are guaranteed to match. Behavior described above is unchanged.

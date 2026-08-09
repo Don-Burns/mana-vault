@@ -35,6 +35,17 @@ function makeCard(
   };
 }
 
+/** Seed a card directly via `putCard` (a single INSERT, no merge-by-printing). */
+async function seedCard(overrides: Partial<CardEntry> = {}): Promise<CardEntry> {
+  const card: CardEntry = {
+    id: crypto.randomUUID(),
+    dateAdded: new Date().toISOString(),
+    ...makeCard(overrides),
+  };
+  await collectionStore.putCard(card);
+  return card;
+}
+
 Deno.test("folder CRUD + reorder", async () => {
   await freshStore();
 
@@ -67,7 +78,7 @@ Deno.test("deleteFolder throws if the folder still contains cards", async () => 
   await freshStore();
 
   const folder = await collectionStore.createFolder("Has Cards");
-  await collectionStore.addCard(makeCard({ folderId: folder.id }));
+  await seedCard({ folderId: folder.id });
 
   await assertRejects(() => collectionStore.deleteFolder(folder.id));
 
@@ -81,48 +92,6 @@ Deno.test("deleteFolder succeeds once the folder is empty", async () => {
   await collectionStore.deleteFolder(folder.id);
 
   assertEquals(await collectionStore.getFolder(folder.id), undefined);
-
-  await collectionStore.close();
-});
-
-Deno.test("addCard merges quantity for duplicate printing", async () => {
-  await freshStore();
-
-  const first = await collectionStore.addCard(makeCard({ quantity: 2 }));
-  const second = await collectionStore.addCard(makeCard({ quantity: 3 }));
-
-  assertEquals(second.id, first.id);
-  assertEquals((await collectionStore.getCard(first.id))?.quantity, 5);
-  assertEquals(await collectionStore.getTotalCardCount(), 5);
-
-  await collectionStore.close();
-});
-
-Deno.test("moveCard splits and merges quantities across folders", async () => {
-  await freshStore();
-
-  const dest = await collectionStore.createFolder("Dest");
-  const card = await collectionStore.addCard(makeCard({ quantity: 5 }));
-
-  await collectionStore.moveCard(card.id, dest.id, 2);
-
-  const source = await collectionStore.getCard(card.id);
-  assertEquals(source?.quantity, 3);
-
-  const moved = await collectionStore.findCardInFolder(
-    dest.id,
-    card.scryfallId,
-  );
-  assertEquals(moved?.quantity, 2);
-
-  // Moving the rest fully removes the source entry.
-  await collectionStore.moveCard(card.id, dest.id);
-  assertEquals(await collectionStore.getCard(card.id), undefined);
-  assertEquals(
-    (await collectionStore.findCardInFolder(dest.id, card.scryfallId))
-      ?.quantity,
-    5,
-  );
 
   await collectionStore.close();
 });
@@ -147,7 +116,7 @@ Deno.test("exportToScratch/readCollectionFromFile round-trip via a standalone db
   const livePath = await freshStore();
 
   const folder = await collectionStore.createFolder("Scratch Test");
-  await collectionStore.addCard(makeCard({ folderId: folder.id, quantity: 7 }));
+  await seedCard({ folderId: folder.id, quantity: 7 });
   const before = await collectionStore.exportCollection();
 
   const scratchPath = await Deno.makeTempFile({ suffix: ".db" });
@@ -171,7 +140,7 @@ Deno.test("importing an invalid file rejects and leaves the live collection unto
   const livePath = await freshStore();
 
   const folder = await collectionStore.createFolder("Keep Me");
-  await collectionStore.addCard(makeCard({ folderId: folder.id, quantity: 1 }));
+  await seedCard({ folderId: folder.id, quantity: 1 });
 
   const garbagePath = await Deno.makeTempFile({ suffix: ".db" });
   await Deno.writeTextFile(garbagePath, "not a sqlite database");
@@ -192,42 +161,36 @@ Deno.test("export a folder's cards to a db file, wipe the collection, then impor
   const livePath = await freshStore();
 
   const main = await collectionStore.createFolder("main");
-  await collectionStore.addCard(
-    makeCard({
-      folderId: main.id,
-      scryfallId: "temple-garden",
-      illustrationId: "illus-temple-garden",
-      oracleId: "oracle-temple-garden",
-      name: "Temple Garden",
-      setCode: "rna",
-      setName: "Ravnica Allegiance",
-      collectorNumber: "246",
-    }),
-  );
-  await collectionStore.addCard(
-    makeCard({
-      folderId: main.id,
-      scryfallId: "orcish-bowmasters",
-      illustrationId: "illus-orcish-bowmasters",
-      oracleId: "oracle-orcish-bowmasters",
-      name: "Orcish Bowmasters",
-      setCode: "lci",
-      setName: "The Lost Caverns of Ixalan",
-      collectorNumber: "134",
-    }),
-  );
-  await collectionStore.addCard(
-    makeCard({
-      folderId: main.id,
-      scryfallId: "scalding-tarn",
-      illustrationId: "illus-scalding-tarn",
-      oracleId: "oracle-scalding-tarn",
-      name: "Scalding Tarn",
-      setCode: "mh2",
-      setName: "Modern Horizons 2",
-      collectorNumber: "247",
-    }),
-  );
+  await seedCard({
+    folderId: main.id,
+    scryfallId: "temple-garden",
+    illustrationId: "illus-temple-garden",
+    oracleId: "oracle-temple-garden",
+    name: "Temple Garden",
+    setCode: "rna",
+    setName: "Ravnica Allegiance",
+    collectorNumber: "246",
+  });
+  await seedCard({
+    folderId: main.id,
+    scryfallId: "orcish-bowmasters",
+    illustrationId: "illus-orcish-bowmasters",
+    oracleId: "oracle-orcish-bowmasters",
+    name: "Orcish Bowmasters",
+    setCode: "lci",
+    setName: "The Lost Caverns of Ixalan",
+    collectorNumber: "134",
+  });
+  await seedCard({
+    folderId: main.id,
+    scryfallId: "scalding-tarn",
+    illustrationId: "illus-scalding-tarn",
+    oracleId: "oracle-scalding-tarn",
+    name: "Scalding Tarn",
+    setCode: "mh2",
+    setName: "Modern Horizons 2",
+    collectorNumber: "247",
+  });
 
   const scratchPath = await Deno.makeTempFile({ suffix: ".db" });
   await Deno.remove(scratchPath); // exportToScratch must create it fresh
