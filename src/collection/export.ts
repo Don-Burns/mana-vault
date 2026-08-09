@@ -2,11 +2,16 @@
  * Export/Import Module
  *
  * Handles exporting the collection as a standalone SQLite-compatible `.db`
- * file, and importing one back in (replacing the collection). Export is
- * built via a scratch Turso connection (see `collectionStore.exportToScratch`)
- * and moved out of OPFS as raw bytes here. Import validates the uploaded
- * bytes via `collectionStore.readCollectionFromFile` on a scratch
- * connection, then swaps them in as the live db file directly.
+ * file, and importing one back in (replacing the collection).
+ *
+ * Both export and import briefly close the live db connection instead of
+ * opening a second concurrent connection to a scratch file. The Turso
+ * WASM/OPFS driver shares a single page-wide worker and I/O-completion
+ * notifier across every open connection; opening a scratch connection
+ * while the live one is still open around this data can lose a wakeup and
+ * hang indefinitely (only resolving once some unrelated later db call
+ * happens to fire another notification). Never having two connections
+ * open at once avoids that class of bug entirely.
  */
 
 import { collectionStore, DB_PATH } from "./store.ts";
@@ -15,18 +20,23 @@ const DB_MIME_TYPE = "application/x-sqlite3";
 
 /**
  * Export the entire collection as a downloadable SQLite `.db` file.
+ *
+ * Closes the live connection, reads the db file's raw bytes directly off
+ * OPFS, then reopens — no scratch connection, so no second connection is
+ * ever open concurrently with the live one.
  */
 export async function exportAsDB(): Promise<void> {
-  const scratchName = `export-${crypto.randomUUID()}.db`;
   const root = await navigator.storage.getDirectory();
 
-  await collectionStore.exportToScratch(scratchName);
+  await collectionStore.checkpointWal();
+  await collectionStore.close();
   try {
-    const handle = await root.getFileHandle(scratchName);
+    const handle = await root.getFileHandle(DB_PATH);
     const bytes = await (await handle.getFile()).arrayBuffer();
     downloadFile(bytes, "mana-vault.db", DB_MIME_TYPE);
   } finally {
-    await root.removeEntry(scratchName);
+    await collectionStore.open();
+    await collectionStore.ensureDefaultFolder();
   }
 }
 
@@ -34,19 +44,24 @@ export async function exportAsDB(): Promise<void> {
  * Import a collection from a SQLite `.db` file (replaces the collection).
  * Prompts the user to select a file.
  *
- * Validates the upload on a throwaway scratch connection first (the live
- * db is untouched if it's not a valid Mana Vault database), then closes
- * the live connection, overwrites the live OPFS file with the (now
- * schema-migrated) upload, and reopens — the live and scratch connections
- * are never open at the same time.
+ * Closes the live connection first, then validates the upload on a
+ * throwaway scratch connection (the live connection is reopened untouched
+ * if it's not a valid Mana Vault database), then overwrites the live OPFS
+ * file with the (now schema-migrated) upload and reopens — the live and
+ * scratch connections are never open at the same time.
  */
-export async function importFromDB(): Promise<{ folders: number; cards: number }> {
+export async function importFromDB(): Promise<
+  { folders: number; cards: number }
+> {
   const file = await selectFile(".db,.sqlite,.sqlite3");
   if (!file) throw new Error("No file selected");
 
   const root = await navigator.storage.getDirectory();
   const scratchName = `import-${crypto.randomUUID()}.db`;
   const scratchHandle = await root.getFileHandle(scratchName, { create: true });
+
+  await collectionStore.checkpointWal();
+  await collectionStore.close();
 
   let data: { folders: unknown[]; cards: unknown[] };
   let migratedBytes: ArrayBuffer;
@@ -58,12 +73,12 @@ export async function importFromDB(): Promise<{ folders: number; cards: number }
     data = await collectionStore.readCollectionFromFile(scratchName);
     migratedBytes = await (await scratchHandle.getFile()).arrayBuffer();
   } catch {
+    await collectionStore.open();
     throw new Error("Not a valid Mana Vault collection database");
   } finally {
     await root.removeEntry(scratchName);
   }
 
-  await collectionStore.close();
   const dbHandle = await root.getFileHandle(DB_PATH, { create: true });
   const writable = await dbHandle.createWritable();
   await writable.write(migratedBytes);
@@ -79,7 +94,11 @@ export async function importFromDB(): Promise<{ folders: number; cards: number }
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
-function downloadFile(content: BlobPart, filename: string, mimeType: string): void {
+function downloadFile(
+  content: BlobPart,
+  filename: string,
+  mimeType: string,
+): void {
   const blob = new Blob([content], { type: mimeType });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");

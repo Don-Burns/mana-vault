@@ -903,6 +903,22 @@ body {
   z-index: 1000;
 }
 
+/* Busy overlay: blocks all interaction during export/import, which briefly
+   close the live db connection (see collection-view.ts withBusyOverlay). */
+.busy-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-primary);
+  font-size: 1.05rem;
+  text-align: center;
+  padding: 1rem;
+}
+
 /* Printing picker (shown above staging/merge overlays, hence a higher z-index) */
 .printing-picker-overlay {
   position: absolute;

@@ -290,12 +290,28 @@ class CollectionStore {
     fn: (db: Database) => Promise<T>,
   ): Promise<T> {
     const db = await this.driver(path);
+    // The WASM/OPFS driver shares a single global IONotifier across every
+    // connection on the page (live + this scratch one). Its wake-up can be
+    // lost to a race (I/O completes right before the step-loop registers
+    // its waiter), which then hangs until *some* connection's I/O finishes
+    // and broadcasts another wake-up — observed in the wild as export
+    // silently never finishing until an unrelated live-db write (e.g. the
+    // next add-to-folder) happens to rescue it. Nudge the live connection
+    // with a cheap no-op query periodically while the scratch work runs,
+    // so a missed wake-up is rescued within one interval instead of
+    // hanging indefinitely.
+    // ponytail: polling nudge, not a real fix for the driver's race —
+    // remove once upstream @tursodatabase/database-wasm fixes IONotifier.
+    const kick = setInterval(() => {
+      this.db?.exec("SELECT 1").catch(() => {});
+    }, 150);
     try {
       await this.initSchema(db);
       const result = await fn(db);
       await db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
       return result;
     } finally {
+      clearInterval(kick);
       await db.close();
     }
   }
@@ -604,6 +620,16 @@ class CollectionStore {
   }
 
   // ─── Export / Import ────────────────────────────────────────────────
+
+  /**
+   * Flush the WAL into the main db file. The OPFS VFS always uses WAL
+   * journal mode, so committed rows can sit in a separate `-wal` side file
+   * until checkpointed — required before reading the live db file's raw
+   * bytes directly (export) or closing it out from under a fresh open.
+   */
+  async checkpointWal(): Promise<void> {
+    await this.db!.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  }
 
   exportCollection(): Promise<{ folders: Folder[]; cards: CardEntry[] }> {
     return readSnapshot(this.db!);

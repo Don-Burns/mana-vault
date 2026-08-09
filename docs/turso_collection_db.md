@@ -52,6 +52,44 @@ Cross-Origin-Embedder-Policy: require-corp
 the collection store fails to open in prod even though the rest of the app
 (OpenCV, camera, matching) still works fine. See the README's deploy section.
 
+### Never open two connections at once (export/import)
+
+`@tursodatabase/database-wasm` runs a **single page-wide Worker**, set up
+once at module load (`index-default.js`'s top-level `setupMainThread`
+singleton), and every `Database` connection — the live one and any scratch
+connection — shares one module-scoped `IONotifier` instance
+(`@tursodatabase/database-wasm-common`). Each connection's internal step
+loop does `await ioNotifier.waitForCompletion()` when it hits a pending
+async I/O op, and any connection's op finishing calls the *same* shared
+`notify()`, waking every waiter.
+
+This is a real missed-wakeup race: if a step loop's async I/O completes and
+calls `notify()` in the gap before that loop has registered its own waiter,
+the wakeup is lost — the connection then hangs until some *other*
+connection happens to do I/O and calls `notify()` again. With two
+concurrent connections (e.g. a scratch db opened for export while the live
+one is idle) this can hang indefinitely with no error, only resolving once
+an unrelated later db call on the *other* connection fires. This actually
+happened: `exportAsDB()`/`importFromDB()` used to open a second ("scratch")
+connection while the live one was still open, and export would sometimes
+hang until the next unrelated write (e.g. adding a card) happened to wake
+it back up.
+
+**Rule going forward: never have two `Database` connections open at the
+same time in this app.** `collection/export.ts`'s `exportAsDB()` and
+`importFromDB()` now `checkpointWal()` + `close()` the live connection
+before opening any scratch connection or reading the db file's raw bytes,
+and reopen it in a `finally`. This is also strictly simpler/faster for
+export than the old approach (a plain OPFS file read instead of an
+in-memory copy into a scratch db). The UI (`collection-view.ts`) shows a
+full-view busy overlay blocking all folder/card mutation while the live
+connection is briefly closed during export/import.
+
+If a future feature seems to need two connections open concurrently
+(e.g. a second scratch db for some other reason), don't — sequence the
+work so only one connection is ever open, or this bug class recurs. This is
+a constraint of the vendored driver, not something fixable in our code.
+
 ### Offline / service worker
 
 No changes were needed to `src/sw.ts` or `vite.config.ts`. The Turso WASM

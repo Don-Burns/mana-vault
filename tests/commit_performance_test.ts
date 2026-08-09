@@ -15,7 +15,6 @@ import { assert } from "@std/assert";
 import { connect } from "@tursodatabase/database";
 import {
   type CardCondition,
-  type CardEntry,
   collectionStore,
   type StagingItem,
 } from "../src/collection/store.ts";
@@ -46,18 +45,10 @@ function stagingItem(i: number): StagingItem {
   };
 }
 
-/** Fast seed: a single INSERT per row (no SELECT-first), unlike addCard. */
+/** Fast seed: bulk insert via commitAdd (single transaction), no per-row round trip. */
 async function seedFolder(folderId: string, count: number): Promise<void> {
-  for (let i = 0; i < count; i++) {
-    const card: CardEntry = {
-      id: crypto.randomUUID(),
-      folderId,
-      dateAdded: new Date().toISOString(),
-      notes: "",
-      ...stagingItem(i),
-    };
-    await collectionStore.putCard(card);
-  }
+  const items = Array.from({ length: count }, (_, i) => stagingItem(i));
+  await collectionStore.commitAdd(folderId, items);
 }
 
 Deno.test("commitAdd: 300 new staged cards into a 1000-card folder completes within budget", async () => {

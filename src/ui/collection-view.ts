@@ -434,7 +434,10 @@ export function CollectionView(container: HTMLElement) {
       confirmLabel: "Move to Collection",
       onConfirm: async () => {
         await collectionStore.applyCardDiffs([
-          { folderId: currentFolderId!, diff: computeDiff(sourceCards, sourceAfter) },
+          {
+            folderId: currentFolderId!,
+            diff: computeDiff(sourceCards, sourceAfter),
+          },
           { folderId: destFolderId, diff: computeDiff(destCards, destAfter) },
         ]);
         const sourceName = el.querySelector("#folder-title")!.textContent ??
@@ -489,8 +492,39 @@ export function CollectionView(container: HTMLElement) {
     await renderFolderList();
   }
 
+  /**
+   * Blocks all folder/card interaction with a full-view overlay + message
+   * while `fn` runs. Export/import both briefly close the live db
+   * connection (see export.ts), so any mutation attempted during that
+   * window would hit a null db — this makes that window impossible to
+   * hit from the UI instead of just narrow.
+   */
+  async function withBusyOverlay<T>(
+    message: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const overlay = document.createElement("div");
+    overlay.className = "busy-overlay";
+    overlay.innerHTML = `<p>${escapeHtml(message)}</p>`;
+    el.appendChild(overlay);
+    try {
+      return await fn();
+    } finally {
+      overlay.remove();
+    }
+  }
+
   async function handleExport() {
-    await exportAsDB();
+    const btn = el.querySelector<HTMLButtonElement>("#btn-export")!;
+    btn.disabled = true;
+    try {
+      await withBusyOverlay("Exporting collection...", exportAsDB);
+      showToast("Collection exported successfully.");
+    } catch (err) {
+      alert(`Export failed: ${(err as Error).message}`);
+    } finally {
+      btn.disabled = false;
+    }
   }
 
   async function handleImport() {
@@ -505,7 +539,10 @@ export function CollectionView(container: HTMLElement) {
     }
 
     try {
-      const result = await importFromDB();
+      const result = await withBusyOverlay(
+        "Importing collection...",
+        importFromDB,
+      );
       await renderFolderList();
       alert(
         `Imported database: ${result.folders} folders, ${result.cards} cards.`,
