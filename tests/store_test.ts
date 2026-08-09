@@ -127,29 +127,24 @@ Deno.test("moveCard splits and merges quantities across folders", async () => {
   await collectionStore.close();
 });
 
-Deno.test("export/import round-trip", async () => {
-  await freshStore();
-
-  const folder = await collectionStore.createFolder("Export Test");
-  await collectionStore.addCard(makeCard({ folderId: folder.id, quantity: 4 }));
-
-  const exported = await collectionStore.exportCollection();
-
+/**
+ * Mimics `importFromDB` in src/collection/export.ts (which uses OPFS APIs
+ * browser-side): validate `sourcePath` on a scratch connection, then close
+ * the live store, overwrite `livePath`'s bytes with the source file, drop
+ * any stale WAL, and reopen.
+ */
+async function importFileIntoLiveStore(livePath: string, sourcePath: string) {
+  const data = await collectionStore.readCollectionFromFile(sourcePath);
   await collectionStore.close();
-  await freshStore();
+  await Deno.copyFile(sourcePath, livePath);
+  await Deno.remove(`${livePath}-wal`).catch(() => {});
+  await collectionStore.open(livePath, connect);
+  await collectionStore.ensureDefaultFolder();
+  return { folders: data.folders.length, cards: data.cards.length };
+}
 
-  await collectionStore.importCollection(exported);
-  const reimported = await collectionStore.exportCollection();
-
-  assertEquals(reimported.folders.length, exported.folders.length);
-  assertEquals(reimported.cards.length, exported.cards.length);
-  assertEquals(reimported.cards[0].quantity, 4);
-
-  await collectionStore.close();
-});
-
-Deno.test("exportToScratch/importFromScratch round-trip via a standalone db file", async () => {
-  await freshStore();
+Deno.test("exportToScratch/readCollectionFromFile round-trip via a standalone db file", async () => {
+  const livePath = await freshStore();
 
   const folder = await collectionStore.createFolder("Scratch Test");
   await collectionStore.addCard(makeCard({ folderId: folder.id, quantity: 7 }));
@@ -159,10 +154,7 @@ Deno.test("exportToScratch/importFromScratch round-trip via a standalone db file
   await Deno.remove(scratchPath); // exportToScratch must create it fresh
   await collectionStore.exportToScratch(scratchPath);
 
-  await collectionStore.close();
-  await freshStore();
-
-  const result = await collectionStore.importFromScratch(scratchPath);
+  const result = await importFileIntoLiveStore(livePath, scratchPath);
   assertEquals(result.folders, before.folders.length);
   assertEquals(result.cards, before.cards.length);
 
@@ -175,8 +167,29 @@ Deno.test("exportToScratch/importFromScratch round-trip via a standalone db file
   await Deno.remove(scratchPath);
 });
 
+Deno.test("importing an invalid file rejects and leaves the live collection untouched", async () => {
+  const livePath = await freshStore();
+
+  const folder = await collectionStore.createFolder("Keep Me");
+  await collectionStore.addCard(makeCard({ folderId: folder.id, quantity: 1 }));
+
+  const garbagePath = await Deno.makeTempFile({ suffix: ".db" });
+  await Deno.writeTextFile(garbagePath, "not a sqlite database");
+
+  await assertRejects(() => collectionStore.readCollectionFromFile(garbagePath));
+
+  // Live store connection/data survive the failed validation untouched.
+  const after = await collectionStore.exportCollection();
+  assertEquals(after.folders.length, 1);
+  assertEquals(after.folders[0].name, "Keep Me");
+  assertEquals(after.cards.length, 1);
+
+  await collectionStore.close();
+  await Deno.remove(garbagePath);
+});
+
 Deno.test("export a folder's cards to a db file, wipe the collection, then import restores them", async () => {
-  await freshStore();
+  const livePath = await freshStore();
 
   const main = await collectionStore.createFolder("main");
   await collectionStore.addCard(
@@ -229,7 +242,7 @@ Deno.test("export a folder's cards to a db file, wipe the collection, then impor
   assertEquals(await collectionStore.getTotalCardCount(), 0);
 
   // Import the exported db back in.
-  const result = await collectionStore.importFromScratch(scratchPath);
+  const result = await importFileIntoLiveStore(livePath, scratchPath);
   assertEquals(result.folders, 1); // just "main" — no default folder was ever created
   assertEquals(result.cards, 3);
 

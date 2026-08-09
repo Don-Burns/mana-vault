@@ -291,15 +291,15 @@ class CollectionStore {
   }
 
   /**
-   * Read a standalone SQLite file at `path` and import its folders/cards
-   * into the live collection (replacing it).
+   * Read a standalone SQLite file at `path` and return its folders/cards
+   * without touching the live collection. Used to validate an uploaded
+   * file before it's swapped in as the live db (see `importFromDB` in
+   * export.ts).
    */
-  async importFromScratch(
+  async readCollectionFromFile(
     path: string,
-  ): Promise<{ folders: number; cards: number }> {
-    const data = await this.withSnapshot(path, readSnapshot);
-    await this.importCollection(data);
-    return { folders: data.folders.length, cards: data.cards.length };
+  ): Promise<{ folders: Folder[]; cards: CardEntry[] }> {
+    return await this.withSnapshot(path, readSnapshot);
   }
 
   // ─── Folder Operations ──────────────────────────────────────────────
@@ -471,16 +471,26 @@ class CollectionStore {
   }
 
   async putCard(card: CardEntry): Promise<void> {
+    this.db?.batch;
     await this.db!.run(
       `INSERT INTO cards (${CARD_COLUMNS})
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
-         folderId = excluded.folderId, scryfallId = excluded.scryfallId,
-         illustrationId = excluded.illustrationId, oracleId = excluded.oracleId,
-         name = excluded.name, setCode = excluded.setCode, setName = excluded.setName,
-         collectorNumber = excluded.collectorNumber, quantity = excluded.quantity,
-         condition = excluded.condition, notes = excluded.notes, dateAdded = excluded.dateAdded,
-         cmc = excluded.cmc, colors = excluded.colors, rarity = excluded.rarity`,
+          folderId = excluded.folderId
+          , scryfallId = excluded.scryfallId
+          , illustrationId = excluded.illustrationId
+          , oracleId = excluded.oracleId
+          , name = excluded.name
+          , setCode = excluded.setCode
+          , setName = excluded.setName
+          , collectorNumber = excluded.collectorNumber
+          , quantity = excluded.quantity
+          , condition = excluded.condition
+          , notes = excluded.notes
+          , dateAdded = excluded.dateAdded
+          , cmc = excluded.cmc
+          , colors = excluded.colors
+          , rarity = excluded.rarity`,
       ...cardValues(card),
     );
   }
@@ -582,12 +592,6 @@ class CollectionStore {
 
   async exportCollection(): Promise<{ folders: Folder[]; cards: CardEntry[] }> {
     return readSnapshot(this.db!);
-  }
-
-  async importCollection(
-    data: { folders: Folder[]; cards: CardEntry[] },
-  ): Promise<void> {
-    await writeSnapshot(this.db!, data);
   }
 
   // ─── Helpers ────────────────────────────────────────────────────────
