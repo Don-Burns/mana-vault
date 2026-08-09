@@ -162,6 +162,9 @@ function processCard(
   // corrupts name lookups for that illustration group. Skip them entirely.
   // Also messes with sorting since they have cmc=0 etc.
   if (card.layout === "art_series") return;
+  // Skip digital-only cards (e.g. MTGO promos) since they don't have real art to download.
+  // May be better to filter on `$.games?.includes("paper")` but this should be more efficient since it doesn't need to iterate the array.
+  if (card.digital) return;
 
   // Skip cards without illustration_id or image URIs
   if (!card.illustration_id || !card.image_uris?.art_crop) {

@@ -54,7 +54,7 @@ test("selecting a search result opens the printing picker with every printing", 
   await page.click(".staging-search-result");
 
   const options = page.locator(".printing-option");
-  await expect(options).toHaveCount(13);
+  await expect(options).toHaveCount(12);
   await expect(page.locator(".printing-option-thumb").first()).toBeVisible();
 });
 
