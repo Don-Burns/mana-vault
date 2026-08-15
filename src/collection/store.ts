@@ -558,7 +558,10 @@ class CollectionStore {
     }));
 
     await this.applyCardDiffs([
-      { folderId: sourceFolderId, diff: computeDiff(sourceBefore, sourceAfter) },
+      {
+        folderId: sourceFolderId,
+        diff: computeDiff(sourceBefore, sourceAfter),
+      },
       {
         folderId: destinationFolderId,
         diff: computeDiff(destBefore, destAfter),
@@ -576,26 +579,41 @@ class CollectionStore {
     diffs: { folderId: string; diff: DiffRow<CardEntry>[] }[],
   ): Promise<void> {
     const txn = this.db!.transactionAsync(async (tx: Transaction) => {
+      let txnBatch: { sql: string; args: Record<string, unknown> }[] = [];
       for (const { folderId, diff } of diffs) {
         for (const row of diff) {
           if (row.kind === "unchanged") continue;
           if (row.kind === "removed") {
-            await tx.run(
-              "DELETE FROM cards WHERE id = :id",
-              { id: row.card.id },
-            );
+            txnBatch.push({
+              sql: "DELETE FROM cards WHERE id = :id",
+              args: { id: row.card.id },
+            });
           } else if (row.kind === "added") {
-            await tx.run(
-              `INSERT INTO cards (${CARD_COLUMNS}) VALUES ${CARD_VALUES}`,
-              cardParams({ ...row.card, folderId, quantity: row.after }),
-            );
+            txnBatch.push({
+              sql: `INSERT INTO cards (${CARD_COLUMNS}) VALUES ${CARD_VALUES}`,
+              args: cardParams({
+                ...row.card,
+                folderId,
+                quantity: row.after,
+              }),
+            });
           } else {
-            await tx.run(
-              "UPDATE cards SET quantity = :quantity WHERE id = :id",
-              { quantity: row.after, id: row.card.id },
-            );
+            txnBatch.push({
+              sql: "UPDATE cards SET quantity = :quantity WHERE id = :id",
+              args: { quantity: row.after, id: row.card.id },
+            });
+          }
+          // flush current batch every 50 statements to avoid hitting
+          // the db too hard with many single statements. Also less ops on app side code
+          if (txnBatch.length >= 50) {
+            await tx.batch(txnBatch);
+            txnBatch = [];
           }
         }
+      }
+      // flush any remaining statements in the batch
+      if (txnBatch.length > 0) {
+        await tx.batch(txnBatch);
       }
     });
     await txn();
