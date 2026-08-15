@@ -1,19 +1,18 @@
 /// <reference types="npm:vite/client" />
 
-// Direct redirect to the exact printing's image — no fetch/JSON round-trip
-// needed, the browser's <img> request follows the 302 itself, and the
-// existing onerror handler already blanks the thumbnail if it 404s.
+// Direct hit on Scryfall's image CDN (no api.scryfall.com round-trip/redirect),
+// per https://scryfall.com/docs/api/images — sharded by the id's first two
+// hex chars. The existing onerror handler already blanks the thumbnail on 404.
 function remoteCardImageUrl(scryfallId: string): string {
-  return `https://api.scryfall.com/cards/${scryfallId}?format=image&version=border_crop`;
+  const [a, b] = scryfallId;
+  return `https://cards.scryfall.io/border_crop/front/${a}/${b}/${scryfallId}.jpg`;
 }
 
 /**
- * Returns the URL for a card's image, either local or from a remote source.
- * Prefers the local offline art pack if it exists, falling back to
- * Scryfall's CDN for the exact printing. Both are keyed by `scryfallId` so
- * the image always matches the exact set/collector number, even after a
- * user correction. Returns `undefined` if `scryfallId` is missing, so
- * callers can show a blank placeholder.
+ * Returns the URL for a card's image from Scryfall's CDN for the exact
+ * printing, keyed by `scryfallId` so the image always matches the exact
+ * set/collector number, even after a user correction. Returns `undefined`
+ * if `scryfallId` is missing, so callers can show a blank placeholder.
  */
 export async function getCardImageUrl(
   scryfallId: string,
