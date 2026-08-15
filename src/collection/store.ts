@@ -220,6 +220,52 @@ async function writeSnapshot(
   await txn();
 }
 
+/**
+ * Works around a real bug in `@tursodatabase/database-wasm`'s browser/OPFS
+ * driver: `stepSync()` returns the same `STEP_IO` code both when real OPFS
+ * I/O is in flight *and* when core just wants a plain re-poll with nothing
+ * to wait on (a `Yield` — e.g. an internal cache/lock retry mid-transaction,
+ * see core/vdbe/mod.rs's `StepResult::Yield` handling upstream). The wasm
+ * driver's only reaction to `STEP_IO` is to park on a shared promise that
+ * resolves when a *real* OPFS worker completion arrives — so for the
+ * plain-Yield case, nothing ever wakes it, and the statement (plus
+ * everything queued behind its connection's exec lock) hangs forever. The
+ * Node native driver is unaffected because its `ioStep` is already a no-op,
+ * so its loop always re-polls immediately.
+ *
+ * Confirmed upstream, still open as of database-wasm 0.7.2 / 0.8.0-pre.4:
+ * https://github.com/tursodatabase/turso/issues/8171 (first report, fixed)
+ * https://github.com/tursodatabase/turso/issues/8341 (Yield variant, open)
+ *
+ * The fix endorsed in both threads: race each `ioStep()` wait against a
+ * short timer so an untracked Yield degrades to a bounded re-poll instead
+ * of parking forever, while a real I/O completion still resolves
+ * immediately via the driver's own notifier. `ioStep` is a plain (if
+ * TS-private) field statements capture via `db.prepare()`/`db.io()` at call
+ * time, so patching it right after connect — before any query runs — is
+ * enough to cover every later query, transaction, and batch.
+ *
+ * ponytail: timer-race workaround, not a real fix for the driver's Yield
+ * handling — remove once upstream ships one (tracked in #8341).
+ */
+function unstickIOStep(db: Database): void {
+  const target = db as unknown as { ioStep?: () => Promise<void> };
+  if (typeof target.ioStep !== "function") return;
+  const original = target.ioStep.bind(target);
+  target.ioStep = () =>
+    new Promise<void>((resolve) => {
+      let settled = false;
+      const settle = () => {
+        if (!settled) {
+          settled = true;
+          resolve();
+        }
+      };
+      original().then(settle, settle);
+      setTimeout(settle, 25);
+    });
+}
+
 class CollectionStore {
   private db: Database | null = null;
   private driver: TursoConnect = connect;
@@ -246,6 +292,7 @@ class CollectionStore {
         }`,
       );
     }
+    unstickIOStep(this.db);
     await this.initSchema(this.db);
   }
 
@@ -290,28 +337,13 @@ class CollectionStore {
     fn: (db: Database) => Promise<T>,
   ): Promise<T> {
     const db = await this.driver(path);
-    // The WASM/OPFS driver shares a single global IONotifier across every
-    // connection on the page (live + this scratch one). Its wake-up can be
-    // lost to a race (I/O completes right before the step-loop registers
-    // its waiter), which then hangs until *some* connection's I/O finishes
-    // and broadcasts another wake-up — observed in the wild as export
-    // silently never finishing until an unrelated live-db write (e.g. the
-    // next add-to-folder) happens to rescue it. Nudge the live connection
-    // with a cheap no-op query periodically while the scratch work runs,
-    // so a missed wake-up is rescued within one interval instead of
-    // hanging indefinitely.
-    // ponytail: polling nudge, not a real fix for the driver's race —
-    // remove once upstream @tursodatabase/database-wasm fixes IONotifier.
-    const kick = setInterval(() => {
-      this.db?.exec("SELECT 1").catch(() => {});
-    }, 150);
+    unstickIOStep(db);
     try {
       await this.initSchema(db);
       const result = await fn(db);
       await db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
       return result;
     } finally {
-      clearInterval(kick);
       await db.close();
     }
   }
@@ -574,6 +606,17 @@ class CollectionStore {
    * Apply precomputed before/after diffs for one or more folders as a
    * single atomic transaction: one INSERT/UPDATE/DELETE per changed row,
    * no per-row SELECT (the diff already encodes what changed).
+   *
+   * Deliberately simple/unbatched: a multi-row-statement version was tried
+   * (grouping rows into chunked multi-row INSERT/UPDATE/DELETE statements)
+   * to work around the wasm/OPFS driver hanging on large single-transaction
+   * writes (see unstickIOStep's comment), but it didn't help — a spike
+   * confirmed even a *single* set-based `INSERT ... SELECT` of 500 rows
+   * hangs the same way. The hang is gated by total rows/pages written in
+   * one transaction, not by statement count/shape, so batching only added
+   * complexity without raising the safe ceiling. `unstickIOStep` is the
+   * real fix for the common (smaller) case; very large single-call
+   * add/move operations (400+ cards) remain a known open limitation.
    */
   async applyCardDiffs(
     diffs: { folderId: string; diff: DiffRow<CardEntry>[] }[],
