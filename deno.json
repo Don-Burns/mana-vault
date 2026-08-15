@@ -16,10 +16,8 @@
   "nodeModulesDir": "auto",
   "imports": {
     "@playwright/test": "npm:@playwright/test@1.62.1",
-    "@std/assert": "jsr:@std/assert@1",
-    "@tursodatabase/database": "npm:@tursodatabase/database@^0.7.2",
-    "@tursodatabase/database-common": "npm:@tursodatabase/database-common@^0.7.2",
-    "@tursodatabase/database-wasm": "npm:@tursodatabase/database-wasm@^0.7.2"
+    "@sqlite.org/sqlite-wasm": "npm:@sqlite.org/sqlite-wasm@3.53.0-build1",
+    "@std/assert": "jsr:@std/assert@1"
   },
   "compilerOptions": {
     "lib": [

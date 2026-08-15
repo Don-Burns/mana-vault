@@ -1,10 +1,10 @@
 import { test, expect } from "@playwright/test";
 
 // End-to-end regression test for the DB export/import flow, exercised in a
-// real browser against the actual WASM/OPFS Turso driver (the Deno unit
-// tests for exportToScratch/importFromScratch in tests/store_test.ts run
-// against the Node native driver over plain files, which never touches
-// OPFS). Drives the whole UI flow the way a user actually would: add a
+// real browser against the actual WASM/OPFS sqlite-wasm driver (the Deno
+// unit tests in tests/store_test.ts exercise the same snapshot/restore
+// logic against an in-memory db, which never touches OPFS). Drives the
+// whole UI flow the way a user actually would: add a
 // card, export the collection to a .db file, delete the card, then
 // re-import that file and confirm the card comes back — without a page
 // reload, switching tabs a few times along the way (see below).

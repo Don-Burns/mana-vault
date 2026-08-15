@@ -80,14 +80,14 @@ hashing to identify cards by their artwork — no internet required at scan time
 
 - **Export**: JSON (preserves folder structure) or CSV
 - **Import**: JSON import restores full collection with folders
-- **Turso (SQLite WASM)**: All collection data stored locally in the browser via OPFS
+- **SQLite WASM**: All collection data stored locally in the browser via OPFS
 
 ---
 
 ## Architecture
 
 - OpenCV vendoring/runtime details: [docs/opencv_vendoring.md](docs/opencv_vendoring.md)
-- Turso (SQLite/WASM) collection store details: [docs/turso_collection_db.md](docs/turso_collection_db.md)
+- SQLite/WASM collection store details: [docs/turso_wasm_hang_and_alternatives.md](docs/turso_wasm_hang_and_alternatives.md) (historical: [docs/turso_collection_db.md](docs/turso_collection_db.md))
 - GitHub Pages deploy design: [docs/plans/github_pages_deploy.md](docs/plans/github_pages_deploy.md)
 
 ### System Overview
@@ -111,7 +111,7 @@ hashing to identify cards by their artwork — no internet required at scan time
 │  └──────────┘    └────────────────┘    └────────────┘  │
 │       ↓                                      ↓          │
 │  ┌──────────────────┐    ┌─────────────────────────┐   │
-│  │  Staging List    │ →  │  Collection (Turso)     │   │
+│  │  Staging List    │ →  │  Collection (SQLite)    │   │
 │  │  (review batch)  │    │  Folders + Cards        │   │
 │  └──────────────────┘    └─────────────────────────┘   │
 └─────────────────────────────────────────────────────────┘
@@ -170,7 +170,7 @@ guesses are still shown (in red) but not added to the collection.
 | Language                 | Vanilla TypeScript               | No framework, full control, minimal bundle size            |
 | Image Processing         | OpenCV.js (WASM)                 | Card detection, perspective correction, image manipulation |
 | Hashing                  | Custom pHash + dHash             | Perceptual hashing for art-based card identification       |
-| Storage                  | Turso (SQLite WASM, OPFS)         | Local collection persistence with folder/card schema       |
+| Storage                  | SQLite WASM, OPFS (opfs-sahpool)  | Local collection persistence with folder/card schema       |
 | Offline                  | Service Worker (vite-plugin-pwa) | Cache app shell, WASM, hash DB for full offline use        |
 | Card Data                | Scryfall API                     | Bulk data download + art crop images (one-time)            |
 | Image Processing (build) | Sharp                            | Server-side image resizing for hash computation            |
@@ -182,7 +182,7 @@ guesses are still shown (in red) but not added to the collection.
 ```
 mtg_scanner_js/
 ├── deno.json                 # Tasks, imports, compiler options
-├── vite.config.ts            # Vite config (WASM, workers, COOP/COEP headers)
+├── vite.config.ts            # Vite config (WASM, workers)
 ├── index.html                # App shell with nav + main content area
 ├── .gitignore
 │
@@ -214,7 +214,9 @@ mtg_scanner_js/
 │   │   └── matcher.ts       # Hamming distance search, confidence scoring
 │   │
 │   ├── collection/
-│   │   ├── store.ts         # Turso/SQLite schema, folder + card CRUD, move ops
+│   │   ├── store.ts         # Main-thread RPC client to the store worker
+│   │   ├── store-core.ts    # SQLite schema, folder + card CRUD, move ops (storage-agnostic)
+│   │   ├── store-worker.ts  # Worker hosting the real OPFS-backed SQLite db
 │   │   ├── staging.ts       # Scan session staging list with change events
 │   │   └── export.ts        # JSON/CSV export, JSON import
 │   │
@@ -334,7 +336,7 @@ thickness collapsed towards zero, so normally-bordered cards were reported as
 borderless and cropped in the wrong place. Showcase layouts defeated it
 outright, since their art is not where any of these rectangles say it is.
 
-### Turso (SQLite) Schema
+### SQLite Schema
 
 **`folders` table**:
 
@@ -349,10 +351,12 @@ outright, since their art is not where any of these rectangles say it is.
 - Indexes: `folderId`, `scryfallId`, `illustrationId`, `oracleId`, `name`,
   compound `(folderId, scryfallId)`
 
-The database persists to OPFS via `@tursodatabase/database-wasm`. Because
-OPFS sync access handles lock the file to one tab, opening the app in a
-second tab surfaces a clear error instead of corrupting data — only one tab
-can hold the collection DB open at a time.
+The database persists to OPFS via `@sqlite.org/sqlite-wasm`'s `opfs-sahpool`
+VFS, running inside a dedicated store worker (see
+docs/turso_wasm_hang_and_alternatives.md). Because OPFS sync access handles
+lock the file to one tab, opening the app in a second tab surfaces a clear
+error instead of corrupting data — only one tab can hold the collection DB
+open at a time.
 
 ### Web Worker Architecture
 
@@ -481,14 +485,7 @@ deno task preview  # Preview the production build locally
 ```
 
 Deploy the `dist/` directory to any static hosting (Netlify, Vercel, Cloudflare
-Pages, etc.). The host **must** send the same
-`Cross-Origin-Opener-Policy: same-origin` and
-`Cross-Origin-Embedder-Policy: require-corp` headers as the dev server
-(`vite.config.ts`) — the Turso collection database requires
-SharedArrayBuffer/OPFS sync access handles, which the browser only exposes
-in a cross-origin-isolated context. Without these headers the collection
-store fails to open in production even though OpenCV and the rest of the
-app still work.
+Pages, etc.) — no special response headers are required.
 
 ### GitHub Pages
 
@@ -504,11 +501,8 @@ One-time setup:
 2. Settings → Pages → Source = "GitHub Actions" (not the legacy `gh-pages`
    branch).
 
-GitHub Pages doesn't support custom response headers, so it can't send the
-COOP/COEP headers mentioned above — this is fine here specifically because
-the vendored OpenCV.js build inlines its WASM as base64 and doesn't use
-`SharedArrayBuffer`/pthreads. See `docs/plans/github_pages_deploy.md` for
-the full deploy design, constraints checked, and phase-by-phase notes.
+See `docs/plans/github_pages_deploy.md` for the full deploy design,
+constraints checked, and phase-by-phase notes.
 
 ---
 

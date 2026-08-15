@@ -150,38 +150,19 @@ self.addEventListener("fetch", (event: FetchEvent) => {
 
 // ─── Caching Strategies ───────────────────────────────────────────
 
-// GitHub Pages can't set custom response headers, but the Turso WASM DB
-// (@tursodatabase/database-wasm) is built as a threaded wasm32-wasip1-threads
-// binary that requires SharedArrayBuffer, which only works when the page is
-// cross-origin isolated. Since this SW controls every same-origin response,
-// we inject the COOP/COEP headers ourselves (the "coi-serviceworker" trick).
-// Safe here because the app makes no cross-origin fetches that would need a
-// CORP header to survive `require-corp` (see src/main.ts reload logic, which
-// forces a reload once this SW takes control so the headers actually apply).
-function withCoiHeaders(response: Response): Response {
-  const headers = new Headers(response.headers);
-  headers.set("Cross-Origin-Opener-Policy", "same-origin");
-  headers.set("Cross-Origin-Embedder-Policy", "require-corp");
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  });
-}
-
 async function cacheFirst(
   request: Request,
   cacheName: string,
 ): Promise<Response> {
   const cached = await caches.match(request);
-  if (cached) return withCoiHeaders(cached);
+  if (cached) return cached;
 
   const response = await fetch(request);
   if (response.ok) {
     const cache = await caches.open(cacheName);
     cache.put(request, response.clone());
   }
-  return withCoiHeaders(response);
+  return response;
 }
 
 async function networkFirst(request: Request): Promise<Response> {
@@ -191,16 +172,14 @@ async function networkFirst(request: Request): Promise<Response> {
       const cache = await caches.open(CACHE_NAME);
       cache.put(request, response.clone());
     }
-    return withCoiHeaders(response);
+    return response;
   } catch {
     const cached = await caches.match(request);
-    if (cached) return withCoiHeaders(cached);
-    return withCoiHeaders(
-      new Response("Offline", {
-        status: 503,
-        statusText: "Service Unavailable",
-      }),
-    );
+    if (cached) return cached;
+    return new Response("Offline", {
+      status: 503,
+      statusText: "Service Unavailable",
+    });
   }
 }
 
@@ -217,10 +196,10 @@ async function staleWhileRevalidate(request: Request): Promise<Response> {
   }).catch(() => undefined);
 
   // Return cached immediately if available, otherwise wait for network
-  if (cached) return withCoiHeaders(cached);
+  if (cached) return cached;
 
   const response = await fetchPromise;
-  if (response) return withCoiHeaders(response);
+  if (response) return response;
 
-  return withCoiHeaders(new Response("Offline", { status: 503 }));
+  return new Response("Offline", { status: 503 });
 }

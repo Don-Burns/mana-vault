@@ -13,7 +13,7 @@ import { test, expect } from "@playwright/test";
 // playwright.config.ts) — at "/" the two URL forms happen to collide anyway
 // so this class of bug would silently pass.
 
-test("service worker installs, activates, and achieves cross-origin isolation", async ({ page }) => {
+test("service worker installs and activates", async ({ page }) => {
   const pageErrors: string[] = [];
   const consoleErrors: string[] = [];
   page.on("pageerror", (err) => pageErrors.push(err.message));
@@ -22,17 +22,9 @@ test("service worker installs, activates, and achieves cross-origin isolation", 
   });
 
   await page.goto("/");
-  // main.ts forces one reload if the page isn't already cross-origin
-  // isolated, to pick up the SW's injected COOP/COEP headers (GitHub Pages
-  // can't set these itself). The local preview server sends those headers
-  // directly (see vite.config.ts server.headers), so isolation may already
-  // be true on the very first load without needing that reload — either way
-  // the app must end up isolated with an active, controlling SW.
   await page.waitForFunction(() => navigator.serviceWorker.controller !== null, null, {
     timeout: 20_000,
   });
-  const isolated = await page.evaluate(() => self.crossOriginIsolated);
-  expect(isolated).toBe(true);
 
   expect(pageErrors).toEqual([]);
   expect(consoleErrors).toEqual([]);

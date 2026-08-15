@@ -2,7 +2,7 @@ import { ScannerView } from "./ui/scanner-view.ts";
 import { CollectionView } from "./ui/collection-view.ts";
 import { showToast } from "./ui/toast.ts";
 import { renderFooter } from "./ui/footer.ts";
-import { collectionStore, DB_PATH } from "./collection/store.ts";
+import { collectionStore } from "./collection/store.ts";
 
 type ViewName = "scanner" | "collection";
 
@@ -55,32 +55,14 @@ class App {
   }
 }
 
-// The Turso WASM DB is a threaded build that needs SharedArrayBuffer, which
-// requires the page to be cross-origin isolated. GitHub Pages can't set the
-// COOP/COEP headers for that itself, so src/sw.ts injects them on every
-// same-origin response instead. Those headers only take effect on a
-// navigation the service worker actually controls — not the very first page
-// load before it's installed — so force one reload after the SW is ready.
-// sessionStorage guards against a reload loop if isolation still fails.
-async function ensureCrossOriginIsolated(): Promise<void> {
-  if (self.crossOriginIsolated || !("serviceWorker" in navigator)) return;
-  if (sessionStorage.getItem("coi-reload")) return;
-  await navigator.serviceWorker.ready;
-  sessionStorage.setItem("coi-reload", "1");
-  location.reload();
-}
-
-// True if the collection database doesn't exist on disk yet (fresh install
-// or cleared storage), checked before `open()` creates it.
+// True if the collection database has no folders yet (fresh install or
+// cleared storage), checked before `ensureDefaultFolder()` creates one.
+// Replaces a previous raw-OPFS file-existence check: the store's
+// `opfs-sahpool` VFS (see docs/turso_wasm_hang_and_alternatives.md) manages
+// its own private file mapping, so there's no plain OPFS file to peek at
+// directly anymore, and this check is simpler anyway.
 async function isFirstRun(): Promise<boolean> {
-  if (!navigator.storage?.getDirectory) return false;
-  try {
-    const root = await navigator.storage.getDirectory();
-    await root.getFileHandle(DB_PATH);
-    return false;
-  } catch {
-    return true;
-  }
+  return (await collectionStore.getAllFolders()).length === 0;
 }
 
 // Exposed so Playwright tests can seed/measure the store directly — bulk
@@ -93,22 +75,14 @@ async function isFirstRun(): Promise<boolean> {
 
 // Boot the app
 async function boot() {
-  await ensureCrossOriginIsolated();
-  if (!self.crossOriginIsolated && sessionStorage.getItem("coi-reload")) {
-    // Reload was already triggered on a previous pass (or isolation is
-    // unreachable, e.g. no SW support); don't try to open the threaded wasm
-    // DB in a non-isolated context, just bail out.
-    return;
-  }
-
-  const firstRun = await isFirstRun();
-
   // Initialize the database
   await collectionStore.open().catch((err) => {
     console.error("Failed to open collection database:", err);
     showToast("Error opening collection database. See console for details.");
     throw err;
   });
+
+  const firstRun = await isFirstRun();
   await collectionStore.ensureDefaultFolder();
 
   if (firstRun) {

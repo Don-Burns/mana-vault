@@ -59,9 +59,10 @@ export default defineConfig({
   worker: {
     format: "es",
   },
-  // The Turso WASM package uses top-level await, which the dep pre-bundler's
-  // default esbuild target (an older browser baseline) rejects. Raise it to
-  // esnext to match `build.target` above.
+  // Some deps (e.g. the sqlite-wasm package) use modern syntax like
+  // top-level await, which the dep pre-bundler's default esbuild target (an
+  // older browser baseline) rejects. Raise it to esnext to match
+  // `build.target` above.
   optimizeDeps: {
     esbuildOptions: {
       target: "esnext",
@@ -70,9 +71,5 @@ export default defineConfig({
   server: {
     port: 3000,
     host: true,
-    headers: {
-      "Cross-Origin-Opener-Policy": "same-origin",
-      "Cross-Origin-Embedder-Policy": "require-corp",
-    },
   },
 });

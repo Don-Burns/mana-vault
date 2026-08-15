@@ -512,10 +512,10 @@ export function CollectionView(container: HTMLElement) {
 
   /**
    * Blocks all folder/card interaction with a full-view overlay + message
-   * while `fn` runs. Export/import both briefly close the live db
-   * connection (see export.ts), so any mutation attempted during that
-   * window would hit a null db — this makes that window impossible to
-   * hit from the UI instead of just narrow.
+   * while `fn` runs. Import briefly closes and reopens the live db
+   * connection inside the store worker (see export.ts), so any mutation
+   * attempted during that window would hit a closed db — this makes that
+   * window impossible to hit from the UI instead of just narrow.
    */
   async function withBusyOverlay<T>(
     message: string,

@@ -1,28 +1,30 @@
-import { test, expect } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
 // Performance guard for moving a large folder's worth of cards via the
-// "Select All" + "Move to..." flow, against the real WASM/OPFS Turso driver
-// (see tests/commit_performance_test.ts for the equivalent fast-driver
-// check). There's no UI path to bulk-add 500 unique printings — the manual
-// staging flow is one search-and-pick per card — so cards are seeded
-// directly via collectionStore.commitAdd (exposed on window in main.ts for
-// e2e only), the same call the staging-confirm button itself makes. Only
-// the actual "move" (Select All -> Move to... -> confirm) is driven through
+// "Select All" + "Move to..." flow, against the real WASM/OPFS sqlite-wasm
+// driver (see tests/commit_performance_test.ts for the equivalent
+// in-memory fast-driver check). There's no UI path to bulk-add 500 unique
+// printings — the manual staging flow is one search-and-pick per card —
+// so cards are seeded directly via collectionStore.commitAdd (exposed on
+// window in main.ts for e2e only), the same call the staging-confirm
+// button itself makes. Only the actual "move" (Select All -> Move to... ->
+// confirm) is driven through
 // real UI clicks, since that's the operation under test.
 
 const BUDGET_MS = 1000;
-// commitAdd/commitMove currently hang (don't even complete) somewhere
-// between 150-200 new rows in a single transaction against the real
-// browser WASM/OPFS driver (confirmed by hand: 150 rows ~80ms, 200+ rows
-// still not resolved after 15s+). Cap how long we wait so a hang fails
+// A safety cap so a regression (e.g. a future storage-engine issue) fails
 // fast with a clear message instead of stalling the whole suite for
-// minutes.
+// minutes. See docs/turso_wasm_hang_and_alternatives.md: this test used to
+// fail against the old Turso driver, which hung somewhere between 150-500
+// rows in a single transaction; the migration to sqlite-wasm fixed that.
 const HANG_CEILING_MS = 5 * BUDGET_MS;
 const CARD_COUNT = 500;
 
 test("moving 500 selected cards to another folder completes within budget", async ({ page }) => {
   await page.goto("/");
-  await page.waitForSelector("#capture-btn:not([disabled])", { timeout: 30_000 });
+  await page.waitForSelector("#capture-btn:not([disabled])", {
+    timeout: 30_000,
+  });
 
   const { destId, seedMs } = await page.evaluate(
     async ({ count, ceilingMs }) => {
@@ -70,8 +72,12 @@ test("moving 500 selected cards to another folder completes within budget", asyn
 
   expect(
     seedMs,
-    `seeding ${CARD_COUNT} cards into the collection took ${seedMs.toFixed(0)}ms ` +
-      `(outcome: ${seedMs >= HANG_CEILING_MS ? "did not complete" : "completed"}), ` +
+    `seeding ${CARD_COUNT} cards into the collection took ${
+      seedMs.toFixed(0)
+    }ms ` +
+      `(outcome: ${
+        seedMs >= HANG_CEILING_MS ? "did not complete" : "completed"
+      }), ` +
       `budget is ${BUDGET_MS}ms`,
   ).toBeLessThan(BUDGET_MS);
 
@@ -81,7 +87,9 @@ test("moving 500 selected cards to another folder completes within budget", asyn
 
   await page.click("#btn-edit-mode");
   await page.click("#btn-toggle-select-all");
-  await expect(page.locator("#selection-count")).toHaveText(`${CARD_COUNT} selected`);
+  await expect(page.locator("#selection-count")).toHaveText(
+    `${CARD_COUNT} selected`,
+  );
 
   await page.click("#btn-move-selected");
   await page.selectOption("#move-folder-select", destId);
@@ -107,7 +115,8 @@ test("moving 500 selected cards to another folder completes within budget", asyn
 
   await expect(page.locator(".card-item")).toHaveCount(0);
   await page.click("#btn-back");
-  await expect(page.locator(".folder-item", { hasText: "Perf Dest" })).toContainText(
-    `${CARD_COUNT} cards`,
-  );
+  await expect(page.locator(".folder-item", { hasText: "Perf Dest" }))
+    .toContainText(
+      `${CARD_COUNT} cards`,
+    );
 });

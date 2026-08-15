@@ -8,17 +8,17 @@
  */
 
 import { assertEquals } from "@std/assert";
-import { connect } from "@tursodatabase/database";
 import {
   type CardCondition,
   type CardEntry,
-  collectionStore,
   type StagingItem,
-} from "../src/collection/store.ts";
+  TestStore,
+} from "./test-store.ts";
 
-async function freshStore(): Promise<void> {
-  const path = await Deno.makeTempFile({ suffix: ".db" });
-  await collectionStore.open(path, connect);
+async function freshStore(): Promise<TestStore> {
+  const store = new TestStore();
+  await store.open();
+  return store;
 }
 
 function stagingItem(overrides: Partial<StagingItem> = {}): StagingItem {
@@ -38,6 +38,7 @@ function stagingItem(overrides: Partial<StagingItem> = {}): StagingItem {
 
 /** Seed a card directly via `putCard` (a single INSERT, no merge-by-printing). */
 async function seedCard(
+  store: TestStore,
   folderId: string,
   overrides: Partial<StagingItem> = {},
 ): Promise<CardEntry> {
@@ -48,45 +49,45 @@ async function seedCard(
     folderId,
     ...stagingItem(overrides),
   };
-  await collectionStore.putCard(card);
+  await store.putCard(card);
   return card;
 }
 
 Deno.test("commitAdd: creates a new row for an unmatched printing", async () => {
-  await freshStore();
-  const folder = await collectionStore.createFolder("Folder");
+  const store = await freshStore();
+  const folder = await store.createFolder("Folder");
 
-  const result = await collectionStore.commitAdd(folder.id, [
+  const result = await store.commitAdd(folder.id, [
     stagingItem({ scryfallId: "scry-1", quantity: 3 }),
   ]);
 
   assertEquals(result, { applied: 1 });
-  const cards = await collectionStore.getCardsByFolder(folder.id);
+  const cards = await store.getCardsByFolder(folder.id);
   assertEquals(cards.length, 1);
   assertEquals(cards[0].scryfallId, "scry-1");
   assertEquals(cards[0].quantity, 3);
 });
 
 Deno.test("commitAdd: merges quantity into an existing scryfallId match", async () => {
-  await freshStore();
-  const folder = await collectionStore.createFolder("Folder");
-  await seedCard(folder.id, { scryfallId: "scry-1", quantity: 2 });
+  const store = await freshStore();
+  const folder = await store.createFolder("Folder");
+  await seedCard(store, folder.id, { scryfallId: "scry-1", quantity: 2 });
 
-  await collectionStore.commitAdd(folder.id, [
+  await store.commitAdd(folder.id, [
     stagingItem({ scryfallId: "scry-1", quantity: 5 }),
   ]);
 
-  const cards = await collectionStore.getCardsByFolder(folder.id);
+  const cards = await store.getCardsByFolder(folder.id);
   assertEquals(cards.length, 1);
   assertEquals(cards[0].quantity, 7);
 });
 
 Deno.test("commitAdd: batch with both a merge and a new row", async () => {
-  await freshStore();
-  const folder = await collectionStore.createFolder("Folder");
-  await seedCard(folder.id, { scryfallId: "existing", quantity: 2 });
+  const store = await freshStore();
+  const folder = await store.createFolder("Folder");
+  await seedCard(store, folder.id, { scryfallId: "existing", quantity: 2 });
 
-  const result = await collectionStore.commitAdd(folder.id, [
+  const result = await store.commitAdd(folder.id, [
     stagingItem({ scryfallId: "existing", quantity: 1 }),
     stagingItem({
       scryfallId: "brand-new",
@@ -96,7 +97,7 @@ Deno.test("commitAdd: batch with both a merge and a new row", async () => {
   ]);
 
   assertEquals(result, { applied: 2 });
-  const cards = await collectionStore.getCardsByFolder(folder.id);
+  const cards = await store.getCardsByFolder(folder.id);
   assertEquals(cards.length, 2);
   const bySryfallId = Object.fromEntries(
     cards.map((c) => [c.scryfallId, c.quantity]),
@@ -105,30 +106,30 @@ Deno.test("commitAdd: batch with both a merge and a new row", async () => {
 });
 
 Deno.test("commitRemove: exact scryfallId match decrements quantity", async () => {
-  await freshStore();
-  const folder = await collectionStore.createFolder("Folder");
-  await seedCard(folder.id, { scryfallId: "scry-1", quantity: 5 });
+  const store = await freshStore();
+  const folder = await store.createFolder("Folder");
+  await seedCard(store, folder.id, { scryfallId: "scry-1", quantity: 5 });
 
-  const result = await collectionStore.commitRemove(folder.id, [
+  const result = await store.commitRemove(folder.id, [
     stagingItem({ scryfallId: "scry-1", quantity: 2 }),
   ]);
 
   assertEquals(result, { applied: 1, skipped: 0 });
-  const cards = await collectionStore.getCardsByFolder(folder.id);
+  const cards = await store.getCardsByFolder(folder.id);
   assertEquals(cards.length, 1);
   assertEquals(cards[0].quantity, 3);
 });
 
 Deno.test("commitRemove: matches via illustrationId fallback when scryfallId differs", async () => {
-  await freshStore();
-  const folder = await collectionStore.createFolder("Folder");
-  await seedCard(folder.id, {
+  const store = await freshStore();
+  const folder = await store.createFolder("Folder");
+  await seedCard(store, folder.id, {
       scryfallId: "printing-in-folder",
       illustrationId: "illus-shared",
       quantity: 5,
     });
 
-  const result = await collectionStore.commitRemove(folder.id, [
+  const result = await store.commitRemove(folder.id, [
     stagingItem({
       scryfallId: "different-printing",
       illustrationId: "illus-shared",
@@ -137,43 +138,43 @@ Deno.test("commitRemove: matches via illustrationId fallback when scryfallId dif
   ]);
 
   assertEquals(result, { applied: 1, skipped: 0 });
-  const cards = await collectionStore.getCardsByFolder(folder.id);
+  const cards = await store.getCardsByFolder(folder.id);
   assertEquals(cards[0].scryfallId, "printing-in-folder");
   assertEquals(cards[0].quantity, 3);
 });
 
 Deno.test("commitRemove: removing the full quantity deletes the row", async () => {
-  await freshStore();
-  const folder = await collectionStore.createFolder("Folder");
-  await seedCard(folder.id, { scryfallId: "scry-1", quantity: 3 });
+  const store = await freshStore();
+  const folder = await store.createFolder("Folder");
+  await seedCard(store, folder.id, { scryfallId: "scry-1", quantity: 3 });
 
-  const result = await collectionStore.commitRemove(folder.id, [
+  const result = await store.commitRemove(folder.id, [
     stagingItem({ scryfallId: "scry-1", quantity: 3 }),
   ]);
 
   assertEquals(result, { applied: 1, skipped: 0 });
-  assertEquals(await collectionStore.getCardsByFolder(folder.id), []);
+  assertEquals(await store.getCardsByFolder(folder.id), []);
 });
 
 Deno.test("commitRemove: removing more than exists still deletes (clamped) and is not skipped", async () => {
-  await freshStore();
-  const folder = await collectionStore.createFolder("Folder");
-  await seedCard(folder.id, { scryfallId: "scry-1", quantity: 2 });
+  const store = await freshStore();
+  const folder = await store.createFolder("Folder");
+  await seedCard(store, folder.id, { scryfallId: "scry-1", quantity: 2 });
 
-  const result = await collectionStore.commitRemove(folder.id, [
+  const result = await store.commitRemove(folder.id, [
     stagingItem({ scryfallId: "scry-1", quantity: 10 }),
   ]);
 
   assertEquals(result, { applied: 1, skipped: 0 });
-  assertEquals(await collectionStore.getCardsByFolder(folder.id), []);
+  assertEquals(await store.getCardsByFolder(folder.id), []);
 });
 
 Deno.test("commitRemove: unmatched items are skipped and leave the folder untouched", async () => {
-  await freshStore();
-  const folder = await collectionStore.createFolder("Folder");
-  await seedCard(folder.id, { scryfallId: "scry-1", quantity: 5 });
+  const store = await freshStore();
+  const folder = await store.createFolder("Folder");
+  await seedCard(store, folder.id, { scryfallId: "scry-1", quantity: 5 });
 
-  const result = await collectionStore.commitRemove(folder.id, [
+  const result = await store.commitRemove(folder.id, [
     stagingItem({
       scryfallId: "not-in-folder",
       illustrationId: "illus-not-in-folder",
@@ -182,56 +183,56 @@ Deno.test("commitRemove: unmatched items are skipped and leave the folder untouc
   ]);
 
   assertEquals(result, { applied: 0, skipped: 1 });
-  const cards = await collectionStore.getCardsByFolder(folder.id);
+  const cards = await store.getCardsByFolder(folder.id);
   assertEquals(cards.length, 1);
   assertEquals(cards[0].quantity, 5);
 });
 
 Deno.test("commitMove: moves and clamps quantity to what's available in the source", async () => {
-  await freshStore();
-  const source = await collectionStore.createFolder("Source");
-  const dest = await collectionStore.createFolder("Dest");
-  await seedCard(source.id, { scryfallId: "scry-1", quantity: 3 });
+  const store = await freshStore();
+  const source = await store.createFolder("Source");
+  const dest = await store.createFolder("Dest");
+  await seedCard(store, source.id, { scryfallId: "scry-1", quantity: 3 });
 
-  const result = await collectionStore.commitMove(source.id, dest.id, [
+  const result = await store.commitMove(source.id, dest.id, [
     stagingItem({ scryfallId: "scry-1", quantity: 10 }),
   ]);
 
   assertEquals(result, { applied: 1, skipped: 0 });
-  assertEquals(await collectionStore.getCardsByFolder(source.id), []);
-  const destCards = await collectionStore.getCardsByFolder(dest.id);
+  assertEquals(await store.getCardsByFolder(source.id), []);
+  const destCards = await store.getCardsByFolder(dest.id);
   assertEquals(destCards.length, 1);
   assertEquals(destCards[0].quantity, 3);
 });
 
 Deno.test("commitMove: merges into an existing entry in the destination folder", async () => {
-  await freshStore();
-  const source = await collectionStore.createFolder("Source");
-  const dest = await collectionStore.createFolder("Dest");
-  await seedCard(source.id, { scryfallId: "scry-1", quantity: 4 });
-  await seedCard(dest.id, { scryfallId: "scry-1", quantity: 2 });
+  const store = await freshStore();
+  const source = await store.createFolder("Source");
+  const dest = await store.createFolder("Dest");
+  await seedCard(store, source.id, { scryfallId: "scry-1", quantity: 4 });
+  await seedCard(store, dest.id, { scryfallId: "scry-1", quantity: 2 });
 
-  await collectionStore.commitMove(source.id, dest.id, [
+  await store.commitMove(source.id, dest.id, [
     stagingItem({ scryfallId: "scry-1", quantity: 4 }),
   ]);
 
-  const destCards = await collectionStore.getCardsByFolder(dest.id);
+  const destCards = await store.getCardsByFolder(dest.id);
   assertEquals(destCards.length, 1);
   assertEquals(destCards[0].quantity, 6);
-  assertEquals(await collectionStore.getCardsByFolder(source.id), []);
+  assertEquals(await store.getCardsByFolder(source.id), []);
 });
 
 Deno.test("commitMove: matches via illustrationId fallback, using the matched entry's own scryfallId", async () => {
-  await freshStore();
-  const source = await collectionStore.createFolder("Source");
-  const dest = await collectionStore.createFolder("Dest");
-  await seedCard(source.id, {
+  const store = await freshStore();
+  const source = await store.createFolder("Source");
+  const dest = await store.createFolder("Dest");
+  await seedCard(store, source.id, {
       scryfallId: "printing-in-folder",
       illustrationId: "illus-shared",
       quantity: 5,
     });
 
-  await collectionStore.commitMove(source.id, dest.id, [
+  await store.commitMove(source.id, dest.id, [
     stagingItem({
       scryfallId: "different-printing",
       illustrationId: "illus-shared",
@@ -239,19 +240,19 @@ Deno.test("commitMove: matches via illustrationId fallback, using the matched en
     }),
   ]);
 
-  const destCards = await collectionStore.getCardsByFolder(dest.id);
+  const destCards = await store.getCardsByFolder(dest.id);
   assertEquals(destCards.length, 1);
   assertEquals(destCards[0].scryfallId, "printing-in-folder");
   assertEquals(destCards[0].quantity, 2);
 });
 
 Deno.test("commitMove: unmatched items are skipped, leaving both folders untouched", async () => {
-  await freshStore();
-  const source = await collectionStore.createFolder("Source");
-  const dest = await collectionStore.createFolder("Dest");
-  await seedCard(source.id, { scryfallId: "scry-1", quantity: 5 });
+  const store = await freshStore();
+  const source = await store.createFolder("Source");
+  const dest = await store.createFolder("Dest");
+  await seedCard(store, source.id, { scryfallId: "scry-1", quantity: 5 });
 
-  const result = await collectionStore.commitMove(source.id, dest.id, [
+  const result = await store.commitMove(source.id, dest.id, [
     stagingItem({
       scryfallId: "not-in-source",
       illustrationId: "illus-not-in-source",
@@ -260,20 +261,20 @@ Deno.test("commitMove: unmatched items are skipped, leaving both folders untouch
   ]);
 
   assertEquals(result, { applied: 0, skipped: 1 });
-  const sourceCards = await collectionStore.getCardsByFolder(source.id);
+  const sourceCards = await store.getCardsByFolder(source.id);
   assertEquals(sourceCards.length, 1);
   assertEquals(sourceCards[0].quantity, 5);
-  assertEquals(await collectionStore.getCardsByFolder(dest.id), []);
+  assertEquals(await store.getCardsByFolder(dest.id), []);
 });
 
 Deno.test("commitMove: mixed batch — partial clamp, full move, and a skip, in one call", async () => {
-  await freshStore();
-  const source = await collectionStore.createFolder("Source");
-  const dest = await collectionStore.createFolder("Dest");
-  await seedCard(source.id, { scryfallId: "partial", quantity: 2 });
-  await seedCard(source.id, { scryfallId: "full", illustrationId: "illus-full", quantity: 3 });
+  const store = await freshStore();
+  const source = await store.createFolder("Source");
+  const dest = await store.createFolder("Dest");
+  await seedCard(store, source.id, { scryfallId: "partial", quantity: 2 });
+  await seedCard(store, source.id, { scryfallId: "full", illustrationId: "illus-full", quantity: 3 });
 
-  const result = await collectionStore.commitMove(source.id, dest.id, [
+  const result = await store.commitMove(source.id, dest.id, [
     stagingItem({ scryfallId: "partial", quantity: 10 }), // clamps to 2
     stagingItem({ scryfallId: "full", illustrationId: "illus-full", quantity: 3 }), // exact
     stagingItem({
@@ -284,8 +285,8 @@ Deno.test("commitMove: mixed batch — partial clamp, full move, and a skip, in 
   ]);
 
   assertEquals(result, { applied: 2, skipped: 1 });
-  assertEquals(await collectionStore.getCardsByFolder(source.id), []);
-  const destCards = await collectionStore.getCardsByFolder(dest.id);
+  assertEquals(await store.getCardsByFolder(source.id), []);
+  const destCards = await store.getCardsByFolder(dest.id);
   const byScryfallId = Object.fromEntries(
     destCards.map((c) => [c.scryfallId, c.quantity]),
   );
