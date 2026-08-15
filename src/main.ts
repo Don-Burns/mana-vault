@@ -83,6 +83,14 @@ async function isFirstRun(): Promise<boolean> {
   }
 }
 
+// Exposed so Playwright tests can seed/measure the store directly — bulk
+// staging 500+ cards through the manual search-and-pick UI one at a time
+// isn't a real user flow and would be far too slow/flaky to drive in e2e.
+// No auth/secrets in this app (fully local/offline), so no security concern.
+// TODO: Implement the plan in `./docs/plans/build-build-ui.md
+(window as unknown as { __collectionStore: typeof collectionStore })
+  .__collectionStore = collectionStore;
+
 // Boot the app
 async function boot() {
   await ensureCrossOriginIsolated();
