@@ -1,8 +1,14 @@
 /// <reference lib="deno.ns" />
 import { assertEquals } from "@std/assert";
-import { type SortableCard, type SortCriterion, sortCards } from "../src/collection/sort.ts";
+import {
+  type SortableCard,
+  sortCards,
+  type SortCriterion,
+} from "../src/collection/sort.ts";
 
-function card(overrides: Partial<SortableCard> & { name: string }): SortableCard {
+function card(
+  overrides: Partial<SortableCard> & { name: string },
+): SortableCard {
   return {
     setCode: "aaa",
     collectorNumber: "1",
@@ -11,18 +17,27 @@ function card(overrides: Partial<SortableCard> & { name: string }): SortableCard
   };
 }
 
-function crit(method: SortCriterion["method"], direction: SortCriterion["direction"] = "asc"): SortCriterion[] {
+function crit(
+  method: SortCriterion["method"],
+  direction: SortCriterion["direction"] = "asc",
+): SortCriterion[] {
   return [{ method, direction }];
 }
 
 Deno.test("sortCards: name asc", () => {
   const cards = [card({ name: "Zebra" }), card({ name: "Apple" })];
-  assertEquals(sortCards(cards, crit("name")).map((c) => c.name), ["Apple", "Zebra"]);
+  assertEquals(sortCards(cards, crit("name")).map((c) => c.name), [
+    "Apple",
+    "Zebra",
+  ]);
 });
 
 Deno.test("sortCards: name desc", () => {
   const cards = [card({ name: "Apple" }), card({ name: "Zebra" })];
-  assertEquals(sortCards(cards, crit("name", "desc")).map((c) => c.name), ["Zebra", "Apple"]);
+  assertEquals(sortCards(cards, crit("name", "desc")).map((c) => c.name), [
+    "Zebra",
+    "Apple",
+  ]);
 });
 
 Deno.test("sortCards: set + collector number", () => {
@@ -38,7 +53,10 @@ Deno.test("sortCards: quantity asc (new default direction)", () => {
     card({ name: "High", quantity: 5 }),
     card({ name: "Low", quantity: 1 }),
   ];
-  assertEquals(sortCards(cards, crit("quantity")).map((c) => c.name), ["Low", "High"]);
+  assertEquals(sortCards(cards, crit("quantity")).map((c) => c.name), [
+    "Low",
+    "High",
+  ]);
 });
 
 Deno.test("sortCards: quantity desc", () => {
@@ -46,7 +64,10 @@ Deno.test("sortCards: quantity desc", () => {
     card({ name: "Low", quantity: 1 }),
     card({ name: "High", quantity: 5 }),
   ];
-  assertEquals(sortCards(cards, crit("quantity", "desc")).map((c) => c.name), ["High", "Low"]);
+  assertEquals(sortCards(cards, crit("quantity", "desc")).map((c) => c.name), [
+    "High",
+    "Low",
+  ]);
 });
 
 Deno.test("sortCards: cmc, missing pushed to end regardless of direction", () => {
@@ -55,7 +76,11 @@ Deno.test("sortCards: cmc, missing pushed to end regardless of direction", () =>
     card({ name: "Three", cmc: 3 }),
     card({ name: "One", cmc: 1 }),
   ];
-  assertEquals(sortCards(cards, crit("cmc")).map((c) => c.name), ["One", "Three", "NoCmc"]);
+  assertEquals(sortCards(cards, crit("cmc")).map((c) => c.name), [
+    "One",
+    "Three",
+    "NoCmc",
+  ]);
   assertEquals(
     sortCards(cards, crit("cmc", "desc")).map((c) => c.name),
     ["Three", "One", "NoCmc"],
@@ -64,16 +89,26 @@ Deno.test("sortCards: cmc, missing pushed to end regardless of direction", () =>
 
 Deno.test("sortCards: color WUBRG, colorless, multicolor", () => {
   const cards = [
-    card({ name: "Multi", colors: ["W", "U"] }),
+    card({ name: "Multi-WG", colors: ["W", "G"] }),
+    card({ name: "zMulti-UW", colors: ["U", "W"] }),
+    card({ name: "Multi-WU", colors: ["W", "U"] }),
     card({ name: "Colorless", colors: [] }),
     card({ name: "Blue", colors: ["U"] }),
     card({ name: "White", colors: ["W"] }),
+    card({ name: "a multi-pip", colors: ["W", "W"] }),
+    card({ name: "a multi-pip BBW", colors: ["B", "B", "W"] }),
+    card({ name: "z multi-pip WBB", colors: ["W", "B", "B"] }),
   ];
   assertEquals(sortCards(cards, crit("color")).map((c) => c.name), [
+    "a multi-pip",
     "White",
     "Blue",
     "Colorless",
-    "Multi",
+    "Multi-WU",
+    "zMulti-UW",
+    "a multi-pip BBW",
+    "z multi-pip WBB",
+    "Multi-WG",
   ]);
 });
 

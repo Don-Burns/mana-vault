@@ -3,7 +3,13 @@
  * every panel in a comparison lines up under the same ordering criteria.
  */
 
-export type SortMethod = "name" | "set" | "quantity" | "cmc" | "color" | "rarity";
+export type SortMethod =
+  | "name"
+  | "set"
+  | "quantity"
+  | "cmc"
+  | "color"
+  | "rarity";
 
 export interface SortCriterion {
   method: SortMethod;
@@ -40,9 +46,15 @@ const COLOR_ORDER = ["W", "U", "B", "R", "G"];
 
 function colorRank(colors: string[] | undefined): number {
   if (!colors || colors.length === 0) return COLOR_ORDER.length; // colorless
-  if (colors.length > 1) return COLOR_ORDER.length + 1; // multicolor
-  const i = COLOR_ORDER.indexOf(colors[0]);
-  return i === -1 ? COLOR_ORDER.length : i;
+  const colSet = new Set(colors);
+  let rank = 0;
+  // start multicolour low in order
+  if (colSet.size > 1) rank = COLOR_ORDER.length + 1;
+  for (const color of colSet) {
+    const i = COLOR_ORDER.indexOf(color);
+    rank += i;
+  }
+  return rank;
 }
 
 /**
@@ -50,7 +62,9 @@ function colorRank(colors: string[] | undefined): number {
  * has no value for that field — such cards always sort last regardless of
  * direction; direction only reorders cards that do have a value.
  */
-function keyFor<T extends SortableCard>(method: SortMethod): (card: T) => string | number | undefined {
+function keyFor<T extends SortableCard>(
+  method: SortMethod,
+): (card: T) => string | number | undefined {
   switch (method) {
     case "quantity":
       return (c) => c.quantity;
@@ -82,18 +96,22 @@ export function compareCards<T extends SortableCard>(
 
       if (method === "set") {
         const cmp = a.setCode.localeCompare(b.setCode) ||
-          a.collectorNumber.localeCompare(b.collectorNumber, undefined, { numeric: true });
+          a.collectorNumber.localeCompare(b.collectorNumber, undefined, {
+            numeric: true,
+          });
         if (cmp !== 0) return sign * cmp;
         continue;
       }
 
       const key = keyFor<T>(method);
-      const ka = key(a);
-      const kb = key(b);
-      if (ka == null && kb == null) continue;
-      if (ka == null) return 1;
-      if (kb == null) return -1;
-      const cmp = typeof ka === "number" ? ka - (kb as number) : ka.localeCompare(kb as string);
+      const keyA = key(a);
+      const keyB = key(b);
+      if (keyA == null && keyB == null) continue;
+      if (keyA == null) return 1;
+      if (keyB == null) return -1;
+      const cmp = typeof keyA === "number"
+        ? keyA - (keyB as number)
+        : keyA.localeCompare(keyB as string);
       if (cmp !== 0) return sign * cmp;
     }
     return a.name.localeCompare(b.name);
@@ -101,6 +119,9 @@ export function compareCards<T extends SortableCard>(
 }
 
 /** Returns a new sorted array; does not mutate the input. */
-export function sortCards<T extends SortableCard>(cards: T[], criteria: SortCriterion[]): T[] {
+export function sortCards<T extends SortableCard>(
+  cards: T[],
+  criteria: SortCriterion[],
+): T[] {
   return [...cards].sort(compareCards<T>(criteria));
 }
