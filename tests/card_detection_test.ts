@@ -24,6 +24,10 @@
  *   webcam_pic_noisy_3.jpg— "Primeval Titan"           (borderless showcase)
  *   webcam_pic_noisy_4.jpg— "Mister Negative"
  *   webcam_pic_noisy_5.jpg— "Hydro-Man, Fluid Felon"
+ *   full_art_white_on_white.jpg          — "Intangible Virtue" (WOT #6)
+ *   junji_on_white.jpg                   — "Junji, the Midnight Sky" (NEO #102)
+ *   toshiro_umezawa_sld_on_white.jpg     — "Toshiro Umezawa" (SLD #261)
+ *   sleeved_multani.jpg                  — "Multani, Yavimaya's Avatar" (DOM #174, sleeved)
  *
  * The fixtures are in DIFFERENT orientations, which is precisely why the full
  * pipeline must resolve orientation itself rather than relying on the test to
@@ -100,6 +104,31 @@ const HYDROMAN: Fixture = {
   illustrationId: "42defbd3-7471-494b-a1ee-92e5784d0e3c",
 };
 
+// Newly added fixtures — not yet expected to pass.
+const INTANGIBLE_VIRTUE: Fixture = {
+  file: "full_art_white_on_white.jpg",
+  name: "Intangible Virtue",
+  illustrationId: "08794123-97e8-4aa9-8ee3-97bb2e552280",
+};
+
+const JUNJI: Fixture = {
+  file: "junji_on_white.jpg",
+  name: "Junji, the Midnight Sky",
+  illustrationId: "ca4b32ec-4236-4d01-9372-a6aa1b688119",
+};
+
+const TOSHIRO_SLD: Fixture = {
+  file: "toshiro_umezawa_sld_on_white.jpg",
+  name: "Toshiro Umezawa",
+  illustrationId: "512d84dd-10e4-4218-9454-cdf40721409c",
+};
+
+const MULTANI_SLEEVED: Fixture = {
+  file: "sleeved_multani.jpg",
+  name: "Multani, Yavimaya's Avatar",
+  illustrationId: "2e356f4d-df6b-47f7-8a11-6e9bb1b7d080",
+};
+
 const FIXTURES: Fixture[] = [
   TEMPLE,
   KAITO,
@@ -107,6 +136,10 @@ const FIXTURES: Fixture[] = [
   PRIMEVAL_TITAN,
   MR_NEGATIVE,
   HYDROMAN,
+  INTANGIBLE_VIRTUE,
+  JUNJI,
+  TOSHIRO_SLD,
+  MULTANI_SLEEVED,
 ];
 
 // --- Helpers ---

@@ -70,14 +70,18 @@ export function detectCardInMat(cv: Cv, src: Mat): PipelineResult {
     cv.dilate(edges, edges, kernel);
     kernel.delete();
 
-    // Gather card-shaped quad candidates from two complementary sources:
+    // Gather card-shaped quad candidates from three complementary sources:
     //
     //   1. Canny edges — works well for cards against contrasting backgrounds.
     //   2. Otsu threshold — segments a dark card resting on a bright surface
     //      (e.g. a card placed on a sheet of paper), which Canny can miss
     //      when the card's border blends into surrounding printed content.
+    //   3. Adaptive threshold — a single global cutoff (Otsu) can miss a card
+    //      whose border is nearly the same brightness as the background (a
+    //      near-white card on white paper); thresholding each neighborhood
+    //      independently can still pick up that faint local step.
     //
-    // Using both lets us handle cluttered scenes where the card is nested
+    // Using all three lets us handle cluttered scenes where the card is nested
     // inside a larger bright quad (the paper), which we resolve below by
     // preferring the innermost card-shaped quad.
     const candidates: [number, number][][] = [];
@@ -124,6 +128,38 @@ export function detectCardInMat(cv: Cv, src: Mat): PipelineResult {
     threshContours.delete();
     threshHierarchy.delete();
     thresh.delete();
+
+    // Adaptive threshold pass.
+    const adaptive = new cv.Mat();
+    cv.adaptiveThreshold(
+      blurred,
+      adaptive,
+      255,
+      cv.ADAPTIVE_THRESH_GAUSSIAN_C,
+      cv.THRESH_BINARY_INV,
+      25,
+      2,
+    );
+    const adaptiveCloseKernel = cv.getStructuringElement(
+      cv.MORPH_RECT,
+      new cv.Size(7, 7),
+    );
+    cv.morphologyEx(adaptive, adaptive, cv.MORPH_CLOSE, adaptiveCloseKernel);
+    adaptiveCloseKernel.delete();
+
+    const adaptiveContours = new cv.MatVector();
+    const adaptiveHierarchy = new cv.Mat();
+    cv.findContours(
+      adaptive,
+      adaptiveContours,
+      adaptiveHierarchy,
+      cv.RETR_LIST,
+      cv.CHAIN_APPROX_SIMPLE,
+    );
+    collectCardQuads(cv, adaptiveContours, src.cols, src.rows, candidates);
+    adaptiveContours.delete();
+    adaptiveHierarchy.delete();
+    adaptive.delete();
 
     const corners = selectCardQuad(cv, gray, candidates);
 
@@ -180,7 +216,12 @@ export function collectCardQuads(
 
     const peri = cv.arcLength(contour, true);
     const approx = new cv.Mat();
-    cv.approxPolyDP(contour, approx, 0.02 * peri, true);
+    // 0.04 (rather than a tighter 0.02) collapses the extra vertices that
+    // low-contrast edges (e.g. a pale card border against white paper) or
+    // JPEG noise add to an otherwise-rectangular contour, at the cost of
+    // being slightly more forgiving about how rectangular a candidate must
+    // look before reaching the isCardShaped check below.
+    cv.approxPolyDP(contour, approx, 0.04 * peri, true);
 
     if (approx.rows === 4 && cv.isContourConvex(approx)) {
       const points = matToPoints(approx);

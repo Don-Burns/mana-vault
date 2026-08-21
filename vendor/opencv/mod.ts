@@ -116,6 +116,15 @@ export interface Cv {
   getStructuringElement(shape: CvEnum, ksize: Size): Mat;
   resize?(src: Mat, dst: Mat, dsize: Size): void;
   rotate(src: Mat, dst: Mat, rotateCode: CvEnum): void;
+  adaptiveThreshold(
+    src: Mat,
+    dst: Mat,
+    maxValue: number,
+    adaptiveMethod: CvEnum,
+    thresholdType: CvEnum,
+    blockSize: number,
+    C: number,
+  ): void;
 
   // ── Contour analysis ──
   findContours(
@@ -156,6 +165,7 @@ export interface Cv {
   readonly CHAIN_APPROX_SIMPLE: CvEnum;
   readonly THRESH_BINARY_INV: CvEnum;
   readonly THRESH_OTSU: CvEnum;
+  readonly ADAPTIVE_THRESH_GAUSSIAN_C: CvEnum;
   readonly ROTATE_90_CLOCKWISE: CvEnum;
   readonly ROTATE_90_COUNTERCLOCKWISE: CvEnum;
   readonly ROTATE_180: CvEnum;
