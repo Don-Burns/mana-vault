@@ -376,17 +376,17 @@ export function ScannerView(container: HTMLElement) {
   }
 
   async function showStagingReview() {
-    // Replace main content with staging review
-    const items = staging.getAll();
-
     const confirmLabel = mode === "add"
       ? "Add to Collection"
       : mode === "remove"
       ? "Remove from Collection"
       : "Move to Collection";
 
+    // Replace main content with staging review in reverse so latest scans are at top
+    const items = staging.getAll();
     const stagedCardsHtml = items.length > 0
       ? (await Promise.all(items.map((item) => renderStagedCard(item))))
+        .reverse()
         .join("")
       : `<p class="staging-empty">No cards staged yet.</p>`;
 
