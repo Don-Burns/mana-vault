@@ -95,6 +95,8 @@ Deno.test("sortCards: color WUBRG, colorless, multicolor", () => {
     card({ name: "Colorless", colors: [] }),
     card({ name: "Blue", colors: ["U"] }),
     card({ name: "White", colors: ["W"] }),
+    card({ name: "a multi-pip BUG", colors: ["B", "U", "G"] }),
+    card({ name: "a multi-pip WBG", colors: ["W", "B", "G"] }),
     card({ name: "a multi-pip", colors: ["W", "W"] }),
     card({ name: "a multi-pip BBW", colors: ["B", "B", "W"] }),
     card({ name: "z multi-pip WBB", colors: ["W", "B", "B"] }),
@@ -109,6 +111,8 @@ Deno.test("sortCards: color WUBRG, colorless, multicolor", () => {
     "a multi-pip BBW",
     "z multi-pip WBB",
     "Multi-WG",
+    "a multi-pip WBG",
+    "a multi-pip BUG",
   ]);
 });
 
