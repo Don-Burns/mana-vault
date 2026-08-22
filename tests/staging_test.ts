@@ -1,7 +1,10 @@
 /// <reference lib="deno.ns" />
 
-import { assertEquals } from "@std/assert";
-import { StagingList } from "../src/collection/staging.ts";
+import { assertEquals, assertThrows } from "@std/assert";
+import {
+  importToStagingListFromCsv as importToStagingListFromCsv,
+  StagingList,
+} from "../src/collection/staging.ts";
 
 // localStorage persists across tests in the same Deno process; each test
 // gets a fresh StagingList, so start with a clean slate every time.
@@ -124,4 +127,145 @@ Deno.test("recovers from corrupt localStorage data", () => {
   } finally {
     localStorage.clear();
   }
+});
+
+const METADATA = {
+  illustrations: {
+    "illus-1": {
+      oracle_id: "oracle-1",
+      name: "Temple of Mystery",
+      cmc: 2,
+      colors: ["G", "U"],
+      printings: [{
+        id: "print-1",
+        set: "znr",
+        set_name: "Zendikar Rising",
+        collector_number: "123",
+        lang: "en",
+        released_at: "2020-09-25",
+        rarity: "uncommon",
+      }],
+    },
+    "illus-2": {
+      oracle_id: "oracle-2",
+      name: "Lightning Strike",
+      cmc: 2,
+      colors: ["R"],
+      printings: [{
+        id: "print-2",
+        set: "m19",
+        set_name: "Core Set 2019",
+        collector_number: "2",
+        lang: "en",
+        released_at: "2018-07-13",
+        rarity: "common",
+      }],
+    },
+    "illus-3": {
+      oracle_id: "oracle-3",
+      name: "Muldrotha, the Gravetide",
+      cmc: 6,
+      colors: ["B", "G", "U"],
+      printings: [{
+        id: "print-3",
+        set: "dom",
+        set_name: "Dominaria",
+        collector_number: "199",
+        lang: "en",
+        released_at: "2018-04-27",
+        rarity: "mythic",
+      }],
+    },
+  },
+};
+
+Deno.test("importToStagingListFromCsv() imports cards from CSV data", async () => {
+  const staging = freshStagingList();
+  const csvData = `name,set_code,collector_number,quantity
+Lightning Strike,m19,2,1`;
+
+  await importToStagingListFromCsv(csvData, staging, METADATA);
+
+  assertEquals(staging.count, 1);
+  assertEquals(staging.totalQuantity, 1);
+});
+
+Deno.test("importToStagingListFromCsv() merges quantities for duplicate rows", async () => {
+  const staging = freshStagingList();
+  const csvData = `name,set_code,collector_number,quantity
+Lightning Strike,m19,2,1
+Lightning Strike,m19,2,2`;
+
+  await importToStagingListFromCsv(csvData, staging, METADATA);
+
+  assertEquals(staging.count, 1);
+  assertEquals(staging.totalQuantity, 3);
+});
+
+Deno.test("importToStagingListFromCsv() handles columns in arbitrary order", async () => {
+  const staging = freshStagingList();
+  const csvData = `quantity,name,set_code,collector_number
+1,Lightning Strike,m19,2`;
+
+  await importToStagingListFromCsv(csvData, staging, METADATA);
+
+  assertEquals(staging.count, 1);
+  assertEquals(staging.totalQuantity, 1);
+});
+
+Deno.test("importToStagingListFromCsv() throws an error for missing required columns", async () => {
+  const staging = freshStagingList();
+  const csvData = `name,set_code,collector_number
+Lightning Strike,m19,2`;
+
+  assertThrows(
+    () => {
+      importToStagingListFromCsv(csvData, staging, METADATA);
+    },
+    Error,
+    "CSV is missing required columns. Expected: quantity, name, set_code, collector_number.",
+  );
+});
+
+Deno.test("importToStagingListFromCsv() throws an error for rows with unknown cards", async () => {
+  const staging = freshStagingList();
+  const csvData = `name,set_code,collector_number,quantity
+Unknown Card,m19,1,1`;
+
+  assertThrows(
+    () => {
+      importToStagingListFromCsv(csvData, staging, METADATA);
+    },
+    Error,
+    "Couldn't find card: Unknown Card (m19 1)",
+  );
+});
+
+Deno.test("importToStagingListFromCsv() handles quoted fields containing commas", () => {
+  const staging = freshStagingList();
+  // The quoted name below contains a comma; a naive comma-split would treat
+  // it as two extra columns and shift set/collector_number/quantity out of
+  // place. Asserting the full, un-split name shows up in the error message
+  // proves the parser actually respects the quoting.
+  const csvData = `name,set_code,collector_number,quantity
+"Unknown, Comma Card",m19,1,1`;
+
+  assertThrows(
+    () => {
+      importToStagingListFromCsv(csvData, staging, METADATA);
+    },
+    Error,
+    "Couldn't find card: Unknown, Comma Card (m19 1)",
+  );
+});
+
+Deno.test("importToStagingListFromCsv() imports a found card whose name needs quote escaping", () => {
+  const staging = freshStagingList();
+  const csvData = `name,set_code,collector_number,quantity
+"Muldrotha, the Gravetide",dom,199,1`;
+
+  importToStagingListFromCsv(csvData, staging, METADATA);
+
+  assertEquals(staging.count, 1);
+  assertEquals(staging.getAll()[0].name, "Muldrotha, the Gravetide");
 });

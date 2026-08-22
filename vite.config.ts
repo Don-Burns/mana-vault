@@ -18,6 +18,16 @@ export default defineConfig({
     __COMMIT_HASH__: JSON.stringify(gitInfo("%H")),
     __COMMIT_DATE__: JSON.stringify(gitInfo("%cI")),
   },
+  resolve: {
+    // Deno resolves "@std/csv" via its own import map (deno.json) to the
+    // npm-compat tarball vendored at node_modules/@jsr/std__csv (see JSR's
+    // npm compatibility docs: https://jsr.io/docs/npm-compatibility). Vite
+    // doesn't read Deno's import map, so it needs the same redirect spelled
+    // out here.
+    alias: {
+      "@std/csv": "@jsr/std__csv",
+    },
+  },
   plugins: [
     VitePWA({
       // We ship a hand-written service worker (src/sw.ts) with custom caching

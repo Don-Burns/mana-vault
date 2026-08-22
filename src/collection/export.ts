@@ -56,7 +56,7 @@ function downloadFile(
   URL.revokeObjectURL(url);
 }
 
-function selectFile(accept: string): Promise<File | null> {
+export function selectFile(accept: string): Promise<File | null> {
   return new Promise((resolve) => {
     const input = document.createElement("input");
     input.type = "file";

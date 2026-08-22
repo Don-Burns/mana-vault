@@ -2,6 +2,7 @@ import { Camera } from "../camera/capture.ts";
 import { CardDetector, DetectionResult } from "../detection/detector.ts";
 import {
   type AlternativePrinting,
+  importToStagingListFromCsv,
   type StagedCard,
   StagingList,
 } from "../collection/staging.ts";
@@ -28,6 +29,7 @@ import {
 import { getCardImageUrl } from "../collection/card-image.ts";
 import { openMergeView } from "./merge-view.ts";
 import { showPrintingPicker } from "./printing-picker.ts";
+import { showCsvImportDialog } from "./csv-import-dialog.ts";
 import { showToast } from "./toast.ts";
 import {
   type MergeMode,
@@ -439,6 +441,9 @@ export function ScannerView(container: HTMLElement) {
           <input type="text" id="staging-search-input" class="staging-search-input"
             placeholder="Search card name to add manually..." autocomplete="off" />
           <ul class="staging-search-results hidden" id="staging-search-results"></ul>
+          <div class="staging-search-actions" style="padding: 0.5rem 0;">
+            <button class="btn-sm" id="btn-import-csv" style="padding: .5rem .5rem;">Import CSV</button>
+          </div>
         </div>
         <div class="staging-list">
           ${stagedCardsHtml}
@@ -534,6 +539,22 @@ export function ScannerView(container: HTMLElement) {
       () => {
         staging.clear();
         closeOverlay();
+      },
+    );
+
+    overlay.querySelector("#btn-import-csv")!.addEventListener(
+      "click",
+      async () => {
+        if (!metadata) return;
+        const csvData = await showCsvImportDialog(el);
+        if (!csvData) return;
+        try {
+          await importToStagingListFromCsv(csvData, staging, metadata);
+        } catch (err) {
+          showToast(`CSV import failed: ${(err as Error).message}`);
+        }
+        overlay.remove();
+        showStagingReview();
       },
     );
 

@@ -4,6 +4,7 @@ import { assertEquals } from "@std/assert";
 import {
   groupedCardSearch,
   printingsForName,
+  searchByForExactPrinting,
 } from "../src/collection/card-search.ts";
 
 function metadata() {
@@ -115,4 +116,35 @@ Deno.test("printingsForName() collects printings across illustration IDs sharing
 
 Deno.test("printingsForName() returns empty array for unknown name", () => {
   assertEquals(printingsForName(metadata(), "Nonexistent Card"), []);
+});
+
+Deno.test("searchByForExactPrinting() returns null for unknown printing", () => {
+  assertEquals(
+    searchByForExactPrinting(
+      "Nonexistent Card",
+      "nonexistent-set",
+      "nonexistent-collector-number",
+      metadata(),
+    ),
+    null,
+  );
+});
+
+Deno.test("searchByForExactPrinting() returns the correct printing for a known card", () => {
+  const printing = searchByForExactPrinting(
+    "Counterspell",
+    "leb",
+    "3",
+    metadata(),
+  );
+  assertEquals(printing, {
+    id: "print-3",
+    illustrationId: "illus-3",
+    set: "leb",
+    set_name: "Limited Edition Beta",
+    collector_number: "3",
+    lang: "en",
+    released_at: "1993-10-01",
+    rarity: "common",
+  });
 });

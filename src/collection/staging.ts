@@ -9,6 +9,8 @@
 import { type CardCondition } from "./store.ts";
 import type { Printing } from "./card-search.ts";
 import { showToast } from "../ui/toast.ts";
+import { parse } from "@std/csv";
+import { type CardMetadata, searchByForExactPrinting } from "./card-search.ts";
 
 const STORAGE_KEY = "mana-vault:staging";
 
@@ -48,7 +50,9 @@ export class StagingList {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (!Array.isArray(parsed)) throw new Error("staging cache is not an array");
+        if (!Array.isArray(parsed)) {
+          throw new Error("staging cache is not an array");
+        }
         this.items = parsed;
       }
     } catch {
@@ -171,5 +175,60 @@ export class StagingList {
     for (const listener of this.listeners) {
       listener();
     }
+  }
+}
+
+export function importToStagingListFromCsv(
+  csvData: string,
+  stagingList: StagingList,
+  metadata: CardMetadata,
+): void {
+  const rows = parse(csvData, {
+    skipFirstRow: true,
+    trimLeadingSpace: true,
+  });
+  if (rows.length === 0) {
+    throw new Error("CSV is empty or only contains headers.");
+  }
+
+  const _firstRow = rows[0];
+  if (
+    _firstRow.quantity === undefined || _firstRow.name === undefined ||
+    _firstRow.set_code === undefined || _firstRow.collector_number === undefined
+  ) {
+    throw new Error(
+      "CSV is missing required columns. Expected: quantity, name, set_code, collector_number.",
+    );
+  }
+
+  const cards: Omit<StagedCard, "id" | "scannedAt">[] = [];
+  for (const row of rows) {
+    const printing = searchByForExactPrinting(
+      row.name,
+      row.set_code,
+      row.collector_number,
+      metadata,
+    );
+    if (!printing) {
+      throw new Error(
+        `Couldn't find card: ${row.name} (${row.set_code} ${row.collector_number})`,
+      );
+    }
+    cards.push({
+      illustrationId: printing.illustrationId,
+      scryfallId: printing.id,
+      oracleId: metadata.illustrations[printing.illustrationId].oracle_id,
+      name: row.name,
+      setCode: printing.set,
+      setName: printing.set_name,
+      collectorNumber: printing.collector_number,
+      quantity: parseInt(row.quantity),
+      condition: "NM",
+      confidence: 100,
+    });
+  }
+  // Add all cards to the staging list after confirming they exist, so we don't partially add cards if one is missing.
+  for (const card of cards) {
+    stagingList.add(card);
   }
 }

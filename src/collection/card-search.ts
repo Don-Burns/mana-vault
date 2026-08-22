@@ -79,3 +79,19 @@ export function printingsForName(
   }
   return printings.sort((a, b) => b.released_at.localeCompare(a.released_at));
 }
+
+export function searchByForExactPrinting(
+  name: string,
+  set: string,
+  collector_number: string,
+  metadata: CardMetadata,
+): Printing | null {
+  for (const printing of printingsForName(metadata, name)) {
+    if (
+      printing.set === set && printing.collector_number === collector_number
+    ) {
+      return printing;
+    }
+  }
+  return null;
+}
