@@ -130,6 +130,75 @@ hand-tuned corner sample. Larger effort, higher risk, not started unless
 Steps 1-2 are validated against the checked-in fixtures and still
 insufficient.
 
+## Part B — investigated approaches, and where things stand
+
+Steps 1 and 2 above were not implemented (color-distance was ruled out
+first, see below); instead the following three approaches were prototyped
+against the two remaining failing fixtures
+(`villainous_wealth_sleeved_on_mat.jpg`, `conduit_of_worlds_sleeved_on_mat.jpg`)
+— dark, low-saturation, textured playmats with no clean full-card contour.
+
+1. **Color-distance / hue segmentation (Step 2 above) — ruled out without
+   implementing.** Pixel sampling showed median saturation ~14% and wildly
+   inconsistent corner-color estimates on the same image (e.g. one corner
+   `(152,144,133)` vs. the opposite corner `(26,25,20)`), which would flag
+   ~80% of the frame as "foreground" — the corner-sampling assumption this
+   step depends on does not hold for these photos.
+2. **Texture/edge-density segmentation** (Laplacian energy → box filter →
+   Otsu → morphological close → contour), prototyped in Python/OpenCV — does
+   **not** solve it: rediscovers the same wrong small inner blob for
+   Villainous Wealth, and finds nothing at all for Conduit of Worlds.
+3. **Hough-line-based quad reconstruction — prototyped, reverted, not shipped.**
+   A card's physical edges are long, straight lines; a painted/woven mat's
+   texture is not. `cv.HoughLinesP` on the existing Canny edge map does
+   visibly pick out the card's true edges as long segments, distinct from
+   mat texture, on both fixtures — a genuinely different and more promising
+   signal than 1 or 2. A first implementation (`findHoughCardQuad` in
+   `src/detection/pipeline.ts`, since reverted — see git history around this
+   doc's last update for the full code) worked as follows:
+   - Bin line segments by direction (10° bins, weighted by segment length).
+   - Search direction-bin pairs in descending combined weight, restricted to
+     roughly-perpendicular pairs, until one produces a plausible
+     (`isCardShaped`, not touching the frame edge) quad.
+   - Within a direction, the two representative "opposite side" lines are
+     the extremes (by perpendicular offset) among that direction's
+     substantially-long lines — not the two longest overall, since a single
+     physical edge can produce two long, offset Hough segments before a real
+     second edge is reached.
+   - Corners are the 4 pairwise intersections of adjacent sides.
+
+   **Result:** it had to be gated to run only when the three existing
+   contour-based passes find *no* candidates at all — running it
+   unconditionally regressed 6 previously-passing fixtures, because the
+   reconstructed quad, even after tuning, could still outscore correct small
+   candidates on raw plausibility. With that gate:
+   - `conduit_of_worlds_sleeved_on_mat.jpg`: detected *a* plausible quad
+     (previously found nothing), but the card was still **misidentified** —
+     the reconstructed corners were close but not accurate enough for the
+     hash matcher to land on the right card.
+   - `villainous_wealth_sleeved_on_mat.jpg`: unchanged/still failed. The
+     contour-based passes already produce one (wrong) small candidate for
+     this fixture, so the "no candidates at all" gate never let Hough run
+     for it at all — and removing that gate re-introduced the regression
+     from the bullet above.
+   - No regressions against the previously-passing fixtures either way.
+
+   **Reverted** because it fixed neither target fixture: it changed *how*
+   Conduit of Worlds fails (wrong quad instead of no quad) without changing
+   the test outcome, and never even engaged for Villainous Wealth. ~250
+   lines of new geometry code (direction binning, rho clustering, line
+   intersection, bin-pair search) for zero passing fixtures wasn't a good
+   trade. Kept here as a lead for a future attempt: the reconstruction is
+   close on Conduit (a shape is found) and would need corner-precision
+   tuning; Villainous Wealth additionally needs a principled way to let a
+   new candidate source override a *wrong* existing candidate, not just an
+   *absent* one — unsolved by any approach tried so far.
+
+Both fixtures are marked `knownFailing` in `tests/card_detection_test.ts`
+(the test asserts they still fail, so the suite stays green and the flag
+must be removed — and the test will start failing — the moment a real fix
+lands).
+
 ## Trade-offs
 
 | Step | Effort | Risk | Solves |
@@ -158,8 +227,12 @@ insufficient.
 ## New/changed files (summary)
 - New: fixtures in `tests/data/input/` (Step 0, done), this doc.
 - Changed (done, Step 1 groundwork): `tests/card_detection_test.ts` (new
-  `Fixture` entries), `src/detection/pipeline.ts` (frame-edge rejection,
-  symmetric brightness-diff nesting, `findCardQuadCandidates` factored out).
+  `Fixture` entries, `knownFailing` flag on the two still-failing ones),
+  `src/detection/pipeline.ts` (frame-edge rejection, symmetric
+  brightness-diff nesting, `findCardQuadCandidates` factored out).
+- Prototyped and reverted (Part B): Hough-line candidate source in
+  `src/detection/pipeline.ts` (`findHoughCardQuad`) and a `HoughLinesP`
+  binding in `vendor/opencv/mod.ts` — see Part B above for why.
 - Changed (not done, Steps 1-2 proper): `src/detection/pipeline.ts` (CLAHE
   preprocessing, color-distance candidate pass), possibly
   `vendor/opencv/mod.ts` (new `Cv` bindings, precedent: `adaptiveThreshold`).

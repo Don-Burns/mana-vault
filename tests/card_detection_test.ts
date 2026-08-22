@@ -28,7 +28,9 @@
  *   junji_on_white.jpg                   — "Junji, the Midnight Sky" (NEO #102)
  *   toshiro_umezawa_sld_on_white.jpg     — "Toshiro Umezawa" (SLD #261)
  *   sleeved_multani.jpg                  — "Multani, Yavimaya's Avatar" (DOM #174, sleeved)
+ *   crucible_of_worlds_sleeved_on_mat.jpg — "Crucible of Worlds" (sleeved, on mat)
  *   thalia_guadian_of_thraben_on_mat.jpg  — "Thalia, Guardian of Thraben" (on mat)
+ *   villainous_wealth_sleeved_on_mat.jpg   — "Villainous Wealth" (sleeved, on mat)
  *   villainous_wealth_sleeved_on_white.jpg — "Villainous Wealth" (sleeved, on white)
  *
  * The fixtures are in DIFFERENT orientations, which is precisely why the full
@@ -40,7 +42,13 @@
  * OpenCV.js build has no imgcodecs / imdecode).
  */
 
-import { assert, assertEquals, assertGreater, assertThrows } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertGreater,
+  assertRejects,
+  assertThrows,
+} from "@std/assert";
 import { HashDB } from "../src/matching/hashdb.ts";
 import {
   detectCardInMat,
@@ -66,6 +74,14 @@ interface Fixture {
   file: string;
   name: string;
   illustrationId: string;
+  /**
+   * Set when this fixture is a known, not-yet-fixed detection/identification
+   * failure (tracked in docs/plans/non_white_surface_detection.md). The test
+   * asserts that it *still* fails, so the suite stays green without hiding
+   * the fixture — and so it fails loudly (telling you to drop this flag)
+   * the moment a future fix makes it pass.
+   */
+  knownFailing?: string;
 }
 
 const TEMPLE: Fixture = {
@@ -131,10 +147,26 @@ const MULTANI_SLEEVED: Fixture = {
   illustrationId: "2e356f4d-df6b-47f7-8a11-6e9bb1b7d080",
 };
 
+const CONDUIT_SLEEVED: Fixture = {
+  file: "conduit_of_worlds_sleeved_on_mat.jpg",
+  name: "Conduit of Worlds",
+  illustrationId: "50414312-464d-4869-b96a-c731db9d485f",
+  knownFailing:
+    "dark/textured playmat with no clean card contour — see docs/plans/non_white_surface_detection.md",
+};
+
 const THALIA: Fixture = {
   file: "thalia_guadian_of_thraben_on_mat.jpg",
   name: "Thalia, Guardian of Thraben",
   illustrationId: "dd372f20-0ea6-4e69-92b5-c3d3d1a2ba2e",
+};
+
+const VILLAINOUS_WEALTH_MAT: Fixture = {
+  file: "villainous_wealth_sleeved_on_mat.jpg",
+  name: "Villainous Wealth",
+  illustrationId: "e46a8183-2725-4ddf-9494-8f4367af826f",
+  knownFailing:
+    "dark/textured playmat with no clean card contour — see docs/plans/non_white_surface_detection.md",
 };
 
 const VILLAINOUS_WEALTH_WHITE: Fixture = {
@@ -154,7 +186,9 @@ const FIXTURES: Fixture[] = [
   JUNJI,
   TOSHIRO_SLD,
   MULTANI_SLEEVED,
+  CONDUIT_SLEEVED,
   THALIA,
+  VILLAINOUS_WEALTH_MAT,
   VILLAINOUS_WEALTH_WHITE,
 ];
 
@@ -213,7 +247,7 @@ for (const fixture of FIXTURES) {
       const db = await loadDB();
       const src = loadImageMat(fixture.file);
 
-      try {
+      const runAssertions = async () => {
         const result = identifyCardInMat(cv, src, db);
 
         assert(result.detected, "Should detect a card shape");
@@ -239,6 +273,19 @@ for (const fixture of FIXTURES) {
           0,
           "Confidence should be above zero",
         );
+      };
+
+      try {
+        if (fixture.knownFailing) {
+          await assertRejects(
+            () => runAssertions(),
+            Error,
+            undefined,
+            `${fixture.name} is marked knownFailing (${fixture.knownFailing}) but now passes — remove the knownFailing flag on this fixture`,
+          );
+        } else {
+          await runAssertions();
+        }
       } finally {
         src.delete();
       }
