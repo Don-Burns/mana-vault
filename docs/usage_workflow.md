@@ -22,6 +22,47 @@ The scanner has a mode dropdown with three options: **Add**, **Remove**, **Move*
 
 In all modes, the staging review screen lets the user adjust the quantity of each staged card (+/-) or remove it entirely before confirming.
 
+### Importing Cards via CSV
+
+In addition to scanning and manual name search, the staging review screen has
+an **Import CSV** button for bulk-adding cards by set/collector number. It
+opens a small dialog with two ways to supply the data:
+
+- **Choose File…** — pick a `.csv` file from disk.
+- **Paste CSV data** — paste CSV text directly into the text box and submit.
+
+The CSV must have a header row followed by one row per card. Columns are
+matched by header name, so they can appear in any order:
+
+```
+name,set_code,collector_number,quantity
+Lightning Strike,m19,2,1
+"Muldrotha, the Gravetide",dom,199,1
+```
+
+Fields containing a comma must be quoted (standard CSV quoting/escaping is
+supported). Each row is matched to an exact printing (name + set code +
+collector number) in the card database. If any row can't be matched, or the
+header is missing a required column, the whole import is rejected and an
+error toast explains why — no cards are staged until every row resolves, so
+a typo can't silently add the wrong printing or partially apply the import.
+
+### Exporting Cards via CSV
+
+The collection view's **Export CSV** button (folder list header) opens a
+dialog to export cards as CSV, in the same column layout the CSV importer
+above expects (`quantity,name,set_code,collector_number,condition`) — so an
+exported file can be re-imported as-is.
+
+- **Scope** — a dropdown to export either the whole collection or a single
+  folder.
+- **Download File** — saves the CSV as a file.
+- **Copy to Clipboard** — copies the CSV text to the system clipboard.
+
+This is separate from the full-collection **Export**/**Import** buttons,
+which round-trip the entire SQLite database file (all folders, exact byte
+restore) rather than a folder-scoped CSV.
+
 ### Merge Viewer
 
 Confirming a staging review (Add/Remove/Move) or a collection-view "Move
