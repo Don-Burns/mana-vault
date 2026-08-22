@@ -88,11 +88,22 @@ export class Camera {
 
   /**
    * Capture the current video frame to a canvas and return it.
+   *
+   * When `rect` is given, only that sub-region is read back (still drawn
+   * from the full frame, so callers can crop cheaply to a region of
+   * interest — e.g. around a card found in the previous frame — without a
+   * separate draw pass). Both the OpenCV work downstream and the
+   * `postMessage` transfer to the detection worker scale with the returned
+   * `ImageData`'s size, so a smaller rect is cheaper end to end, not just
+   * for detection itself.
    */
-  captureFrame(): ImageData | null {
+  captureFrame(rect?: { x: number; y: number; width: number; height: number }): ImageData | null {
     const ctx = this.drawCurrentFrame();
     if (!ctx) return null;
 
+    if (rect) {
+      return ctx.getImageData(rect.x, rect.y, rect.width, rect.height);
+    }
     return ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height);
   }
 

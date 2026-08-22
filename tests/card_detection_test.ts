@@ -319,7 +319,8 @@ function timeMedian(fn: () => void): number {
 for (const fixture of FIXTURES) {
   if (fixture.knownFailing) continue; // Skip known-failing fixtures for performance tests, since they don't reach the matching stage.
   Deno.test(`detectCardInMat: ${fixture.file} completes within budget (${fixture.name})`, () => {
-    const budget_ms = 50;
+    // ci machines less powerful than dev machines, so give them a bit more headroom.
+    const budget_ms = Deno.env.get("CI") ? 80 : 40;
     const src = loadImageMat(fixture.file);
     try {
       const elapsed = timeMedian(() => {
@@ -343,7 +344,8 @@ for (const fixture of FIXTURES) {
   Deno.test(`identifyCardInMat: ${fixture.file} completes within budget (${fixture.name})`, async () => {
     const db = await loadDB();
     const src = loadImageMat(fixture.file);
-    const budget_ms = 90;
+    // ci machines less powerful than dev machines, so give them a bit more headroom.
+    const budget_ms = Deno.env.get("CI") ? 150 : 80;
     try {
       const elapsed = timeMedian(() => {
         identifyCardInMat(cv, src, db);

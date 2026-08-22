@@ -20,6 +20,11 @@ import {
 } from "../collection/card-search.ts";
 import { loadMetadata } from "../collection/metadata-loader.ts";
 import { ScanDedupTracker } from "./scan-dedup.ts";
+import {
+  computeTrackingRect,
+  translateQuad,
+  translateQuads,
+} from "./tracking-rect.ts";
 import { getCardImageUrl } from "../collection/card-image.ts";
 import { openMergeView } from "./merge-view.ts";
 import { showPrintingPicker } from "./printing-picker.ts";
@@ -55,11 +60,11 @@ export function ScannerView(container: HTMLElement) {
   // display-rate sampling and running it flat out drains the battery.
   const TARGET_FPS = 20;
 
-  // Stability tracking for auto-capture. At TARGET_FPS, 8 frames is ~0.4s of
+  // Stability tracking for auto-capture. At TARGET_FPS, 4 frames is ~0.2s of
   // holding the card steady.
   let stableFrameCount = 0;
   let lastCorners: [number, number][] | null = null;
-  const STABLE_THRESHOLD = 8;
+  const STABLE_THRESHOLD = 4;
   const CORNER_TOLERANCE = 15;
   let lastCaptureTime = 0;
   const CAPTURE_COOLDOWN = 2000; // ms between captures to avoid duplicates
@@ -198,10 +203,37 @@ export function ScannerView(container: HTMLElement) {
     isProcessing = true;
 
     try {
-      const frame = camera.captureFrame();
+      // Narrow the search to a region around the card's last known
+      // position, when we have one — cheaper for the detector, and cheaper
+      // still because a smaller ImageData crosses the worker's postMessage
+      // boundary. `rect` is null (full-frame capture) whenever nothing was
+      // found last frame, which also self-heals a stale hint: losing the
+      // card resets tracking and the next frame searches the whole camera
+      // frame again.
+      const rect = computeTrackingRect(
+        lastCorners,
+        camera.videoWidth,
+        camera.videoHeight,
+      );
+      const frame = camera.captureFrame(rect ?? undefined);
       if (!frame) return;
 
       const result = await detector.detect(frame);
+      // Translate back into full-frame coordinates so all downstream logic
+      // (stability comparison, overlay drawing, the next frame's rect) can
+      // stay oblivious to whether this frame was cropped.
+      if (rect) {
+        if (result.corners) {
+          result.corners = translateQuad(result.corners, rect.x, rect.y);
+        }
+        if (result.candidates) {
+          result.candidates = translateQuads(
+            result.candidates,
+            rect.x,
+            rect.y,
+          );
+        }
+      }
       lastDetection = result;
       lastFrame = frame;
       drawOverlay(overlayCanvas, result);
@@ -215,7 +247,7 @@ export function ScannerView(container: HTMLElement) {
             const now = Date.now();
             if (now - lastCaptureTime > CAPTURE_COOLDOWN) {
               lastCaptureTime = now;
-              await handleCapture(frame);
+              await handleCapture();
             }
             stableFrameCount = 0;
           }
@@ -243,11 +275,18 @@ export function ScannerView(container: HTMLElement) {
     return true;
   }
 
-  async function handleCapture(frame: ImageData) {
-    if (!detector || !metadata) return;
+  async function handleCapture() {
+    if (!detector || !metadata || !camera) return;
 
     const statusEl = el.querySelector<HTMLElement>("#scanner-status")!;
     statusEl.textContent = "Matching...";
+
+    // Always identify from a fresh, full, uncropped frame — the per-frame
+    // detect() call above may have run on a narrowed region-of-interest
+    // crop (see computeTrackingRect), but identification needs the whole
+    // card at full resolution regardless of how it was located.
+    const frame = camera.captureFrame();
+    if (!frame) return;
 
     // Full identification happens in the worker, which owns OpenCV and the
     // hash database: detect → warp → hash both portrait orientations → match.
@@ -365,7 +404,7 @@ export function ScannerView(container: HTMLElement) {
 
   function handleManualCapture() {
     if (lastDetection?.found && lastFrame) {
-      handleCapture(lastFrame);
+      handleCapture();
     } else {
       const statusEl = el.querySelector<HTMLElement>("#scanner-status")!;
       statusEl.textContent = "No card detected";

@@ -32,6 +32,23 @@ export interface PipelineResult {
 const CARD_WIDTH = 745;
 const CARD_HEIGHT = 1040;
 
+/**
+ * Longest side (px) a frame is downscaled to before contour analysis.
+ *
+ * Detection cost scales with pixel count (Gaussian blur, Canny, two
+ * thresholding passes, and three `findContours` calls all touch every
+ * pixel), but corner-finding accuracy doesn't need the source frame's full
+ * resolution — the checked-in low-contrast fixtures (near-white card on
+ * white paper, etc.) are all 816×612 or smaller, so that's the resolution
+ * floor detection has been validated against. 900 leaves those fixtures
+ * completely untouched (`scale` below is clamped to 1, so nothing above
+ * 816px triggers a resize) while still meaningfully shrinking larger
+ * frames — e.g. a live camera's native 1280×720 (see `src/camera/capture.ts`)
+ * downscales to ~900×506, roughly halving detection cost for every frame
+ * that isn't already being handled by the ROI crop in `scanner-view.ts`.
+ */
+const DETECTION_MAX_DIMENSION = 900;
+
 // ---------------------------------------------------------------------------
 // Main Pipeline
 // ---------------------------------------------------------------------------
@@ -46,6 +63,7 @@ const CARD_HEIGHT = 1040;
  */
 export function detectCardInMat(cv: Cv, src: Mat): PipelineResult {
   const gray = new cv.Mat();
+  const resizedMat = new cv.Mat();
 
   try {
     // Grayscale — handle both RGBA and BGR input
@@ -57,12 +75,47 @@ export function detectCardInMat(cv: Cv, src: Mat): PipelineResult {
       src.copyTo(gray);
     }
 
-    const candidates = findCardQuadCandidates(cv, gray, src.cols, src.rows);
-    const corners = selectCardQuad(cv, gray, candidates);
-
-    if (!corners) {
-      return { found: false, candidates };
+    // Downscale for contour analysis only (see DETECTION_MAX_DIMENSION);
+    // corners found in the shrunk frame are scaled back up to source-frame
+    // pixel space below, and the perspective warp still reads full-res
+    // pixels from `src`, so crop quality is unaffected.
+    const scale = Math.min(
+      1,
+      DETECTION_MAX_DIMENSION / Math.max(src.cols, src.rows),
+    );
+    if (scale < 1) {
+      cv.resize(
+        gray,
+        resizedMat,
+        new cv.Size(0, 0),
+        scale,
+        scale,
+        cv.INTER_AREA,
+      );
+    } else {
+      gray.copyTo(resizedMat);
     }
+
+    const resizedMatCandidates = findCardQuadCandidates(
+      cv,
+      resizedMat,
+      resizedMat.cols,
+      resizedMat.rows,
+    );
+    const resizedMatCorners = selectCardQuad(
+      cv,
+      resizedMat,
+      resizedMatCandidates,
+    );
+
+    if (!resizedMatCorners) {
+      return {
+        found: false,
+        candidates: scaleQuads(resizedMatCandidates, 1 / scale),
+      };
+    }
+    const corners = scaleQuad(resizedMatCorners, 1 / scale);
+    const candidates = scaleQuads(resizedMatCandidates, 1 / scale);
 
     // Perspective correction. `selectCardQuad`'s nested-quad preference
     // (below) already resolves a sleeve/mat/paper backing being picked up
@@ -79,7 +132,24 @@ export function detectCardInMat(cv: Cv, src: Mat): PipelineResult {
     };
   } finally {
     gray.delete();
+    resizedMat.delete();
   }
+}
+
+/** Scale every point of a quad by `factor` (used to map corners found in a
+ * downscaled frame back to source-frame pixel space). */
+function scaleQuad(
+  quad: [number, number][],
+  factor: number,
+): [number, number][] {
+  return quad.map(([x, y]) => [x * factor, y * factor]);
+}
+
+function scaleQuads(
+  quads: [number, number][][],
+  factor: number,
+): [number, number][][] {
+  return quads.map((q) => scaleQuad(q, factor));
 }
 
 /**

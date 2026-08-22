@@ -114,7 +114,14 @@ export interface Cv {
     type: CvEnum,
   ): number;
   getStructuringElement(shape: CvEnum, ksize: Size): Mat;
-  resize?(src: Mat, dst: Mat, dsize: Size): void;
+  resize(
+    src: Mat,
+    dst: Mat,
+    dsize: Size,
+    fx?: number,
+    fy?: number,
+    interpolation?: CvEnum,
+  ): void;
   rotate(src: Mat, dst: Mat, rotateCode: CvEnum): void;
   adaptiveThreshold(
     src: Mat,
@@ -169,6 +176,7 @@ export interface Cv {
   readonly ROTATE_90_CLOCKWISE: CvEnum;
   readonly ROTATE_90_COUNTERCLOCKWISE: CvEnum;
   readonly ROTATE_180: CvEnum;
+  readonly INTER_AREA: CvEnum;
   readonly CV_32FC2: CvEnum;
 }
 
