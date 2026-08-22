@@ -64,23 +64,12 @@ export function detectCardInMat(cv: Cv, src: Mat): PipelineResult {
       return { found: false, candidates };
     }
 
-    // Perspective correction
+    // Perspective correction. `selectCardQuad`'s nested-quad preference
+    // (below) already resolves a sleeve/mat/paper backing being picked up
+    // as the outer edge by preferring the smaller, differently-shaded quad
+    // nested inside it, so no separate re-detection pass on the warped
+    // result is needed here.
     const cardMat = perspectiveWarp(cv, src, corners);
-
-    // A sleeve (or other backing) around the card can be picked up as the
-    // outer edge of `corners`, in which case the printed card's own edge is
-    // a smaller quad nested inside the warped result. Try to find it and
-    // re-warp to it; if none is found, keep the original warp unchanged.
-    const refined = refineInnerCardQuad(cv, cardMat);
-    if (refined) {
-      cardMat.delete();
-      return {
-        found: true,
-        corners,
-        candidates,
-        cardMat: refined,
-      };
-    }
 
     return {
       found: true,
@@ -94,8 +83,8 @@ export function detectCardInMat(cv: Cv, src: Mat): PipelineResult {
 }
 
 /**
- * Run all three candidate-collection passes (Canny, Otsu, adaptive
- * threshold) on a grayscale image and return every card-shaped quad found.
+ * Run candidate-collection passes (Canny, Otsu, adaptive threshold) on a
+ * grayscale image and return every card-shaped quad found.
  *
  * Gathers candidates from three complementary sources:
  *
@@ -119,21 +108,42 @@ function findCardQuadCandidates(
   frameHeight: number,
 ): [number, number][][] {
   const blurred = new cv.Mat();
-  const edges = new cv.Mat();
 
   try {
     // Blur to reduce noise
     cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
 
-    // Canny edge detection
+    const candidates: [number, number][][] = [];
+    collectCannyQuads(cv, blurred, frameWidth, frameHeight, candidates);
+    collectOtsuQuads(cv, blurred, frameWidth, frameHeight, candidates);
+    collectAdaptiveThresholdQuads(
+      cv,
+      blurred,
+      frameWidth,
+      frameHeight,
+      candidates,
+    );
+
+    return candidates;
+  } finally {
+    blurred.delete();
+  }
+}
+
+function collectCannyQuads(
+  cv: Cv,
+  blurred: Mat,
+  frameWidth: number,
+  frameHeight: number,
+  out: [number, number][][],
+): void {
+  const edges = new cv.Mat();
+  try {
     cv.Canny(blurred, edges, 50, 150);
 
-    // Dilate to close gaps
     const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
     cv.dilate(edges, edges, kernel);
     kernel.delete();
-
-    const candidates: [number, number][][] = [];
 
     const edgeContours = new cv.MatVector();
     const edgeHierarchy = new cv.Mat();
@@ -144,12 +154,23 @@ function findCardQuadCandidates(
       cv.RETR_LIST,
       cv.CHAIN_APPROX_SIMPLE,
     );
-    collectCardQuads(cv, edgeContours, frameWidth, frameHeight, candidates);
+    collectCardQuads(cv, edgeContours, frameWidth, frameHeight, out);
     edgeContours.delete();
     edgeHierarchy.delete();
+  } finally {
+    edges.delete();
+  }
+}
 
-    // Otsu segmentation pass.
-    const thresh = new cv.Mat();
+function collectOtsuQuads(
+  cv: Cv,
+  blurred: Mat,
+  frameWidth: number,
+  frameHeight: number,
+  out: [number, number][][],
+): void {
+  const thresh = new cv.Mat();
+  try {
     cv.threshold(
       blurred,
       thresh,
@@ -173,13 +194,23 @@ function findCardQuadCandidates(
       cv.RETR_LIST,
       cv.CHAIN_APPROX_SIMPLE,
     );
-    collectCardQuads(cv, threshContours, frameWidth, frameHeight, candidates);
+    collectCardQuads(cv, threshContours, frameWidth, frameHeight, out);
     threshContours.delete();
     threshHierarchy.delete();
+  } finally {
     thresh.delete();
+  }
+}
 
-    // Adaptive threshold pass.
-    const adaptive = new cv.Mat();
+function collectAdaptiveThresholdQuads(
+  cv: Cv,
+  blurred: Mat,
+  frameWidth: number,
+  frameHeight: number,
+  out: [number, number][][],
+): void {
+  const adaptive = new cv.Mat();
+  try {
     cv.adaptiveThreshold(
       blurred,
       adaptive,
@@ -205,117 +236,11 @@ function findCardQuadCandidates(
       cv.RETR_LIST,
       cv.CHAIN_APPROX_SIMPLE,
     );
-    collectCardQuads(
-      cv,
-      adaptiveContours,
-      frameWidth,
-      frameHeight,
-      candidates,
-    );
+    collectCardQuads(cv, adaptiveContours, frameWidth, frameHeight, out);
     adaptiveContours.delete();
     adaptiveHierarchy.delete();
+  } finally {
     adaptive.delete();
-
-    return candidates;
-  } finally {
-    blurred.delete();
-    edges.delete();
-  }
-}
-
-/**
- * Look for the printed card's own edge nested inside an already-warped
- * card image, and re-warp to it if found.
- *
- * A sleeve (or similar backing) around the card is sometimes picked up as
- * the outer detected quad, since it's the highest-contrast boundary in the
- * frame. Its own border is a fixed pixel margin, not a percentage of the
- * card — unlike the printed frame it doesn't match any {@link ART_REGIONS}
- * calibration. Rather than guess a sleeve-thickness percentage, run the same
- * candidate-collection pass on the warped card itself: `collectCardQuads`
- * already rejects quads touching the frame edge, so any candidate found here
- * is necessarily nested inside the outer warp — i.e. a real inner boundary,
- * not the sleeve edge that was just warped to fill the frame. The largest
- * such candidate is the best estimate of the true printed card edge.
- *
- * Returns null (leaving the original warp untouched) when no clean inner
- * quad is found, e.g. an unsleeved card or a sleeve with no visible seam.
- */
-function refineInnerCardQuad(cv: Cv, cardMat: Mat): Mat | null {
-  const gray = new cv.Mat();
-  try {
-    if (cardMat.channels() === 4) {
-      cv.cvtColor(cardMat, gray, cv.COLOR_RGBA2GRAY);
-    } else if (cardMat.channels() === 3) {
-      cv.cvtColor(cardMat, gray, cv.COLOR_BGR2GRAY);
-    } else {
-      cardMat.copyTo(gray);
-    }
-
-    const candidates = findCardQuadCandidates(
-      cv,
-      gray,
-      cardMat.cols,
-      cardMat.rows,
-    );
-    if (candidates.length === 0) return null;
-
-    // Same brightness-contrast discrimination as `selectCardQuad`: a real
-    // sleeve/backing edge has a border whose intensity differs meaningfully
-    // from the printed card it encloses, whereas an ordinary card's own
-    // internal regions (art box, text box) do not differ enough from the
-    // whole card to be mistaken for an outer boundary — this is what
-    // prevents a plain unsleeved card from being needlessly re-cropped.
-    const fullMean = meanIntensity(cv, gray, [
-      [0, 0],
-      [cardMat.cols, 0],
-      [cardMat.cols, cardMat.rows],
-      [0, cardMat.rows],
-    ]);
-    const SLEEVE_BRIGHTNESS_MARGIN = 25;
-
-    // Largest surviving candidate whose content differs enough in
-    // brightness from the whole (sleeve+card) frame — every candidate here
-    // is already guaranteed not to touch the frame edge, so this is the
-    // closest-fitting inner boundary rather than a smaller sub-region of the
-    // card.
-    //
-    // A sleeve trim shrinks both dimensions by roughly the same small
-    // margin, unlike an internal card region (e.g. the rules text box),
-    // which can coincidentally have a card-like aspect ratio while spanning
-    // most of one axis and only a fraction of the other. Requiring both the
-    // width and height to retain most of the canvas span rules those out.
-    const MIN_DIMENSION_RETENTION = 0.75;
-    let best: [number, number][] | null = null;
-    let bestArea = 0;
-    for (const candidate of candidates) {
-      const xs = candidate.map((p) => p[0]);
-      const ys = candidate.map((p) => p[1]);
-      const w = Math.max(...xs) - Math.min(...xs);
-      const h = Math.max(...ys) - Math.min(...ys);
-      if (
-        w < cardMat.cols * MIN_DIMENSION_RETENTION ||
-        h < cardMat.rows * MIN_DIMENSION_RETENTION
-      ) continue;
-
-      const mean = meanIntensity(cv, gray, candidate);
-      if (Math.abs(mean - fullMean) <= SLEEVE_BRIGHTNESS_MARGIN) continue;
-      const area = quadArea(candidate);
-      if (area > bestArea) {
-        best = candidate;
-        bestArea = area;
-      }
-    }
-    if (!best) return null;
-
-    // Not worth re-warping for a trivial trim — only refine when the inner
-    // quad is meaningfully smaller (a real sleeve margin, not detection
-    // noise).
-    if (bestArea > cardMat.cols * cardMat.rows * 0.9) return null;
-
-    return perspectiveWarp(cv, cardMat, best);
-  } finally {
-    gray.delete();
   }
 }
 

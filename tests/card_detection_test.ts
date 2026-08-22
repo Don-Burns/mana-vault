@@ -294,6 +294,73 @@ for (const fixture of FIXTURES) {
 }
 
 // ---------------------------------------------------------------------------
+// Detection Performance Tests
+// ---------------------------------------------------------------------------
+const WARMUP_ITERATIONS = 2;
+const TIMED_ITERATIONS = 5;
+function median(arr: number[]): number {
+  const sorted = [...arr].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+/** Median wall-clock time (ms) of `fn`, after discarding warm-up runs. */
+function timeMedian(fn: () => void): number {
+  for (let i = 0; i < WARMUP_ITERATIONS; i++) fn();
+
+  const timings: number[] = [];
+  for (let i = 0; i < TIMED_ITERATIONS; i++) {
+    const t0 = performance.now();
+    fn();
+    timings.push(performance.now() - t0);
+  }
+  return median(timings);
+}
+
+for (const fixture of FIXTURES) {
+  if (fixture.knownFailing) continue; // Skip known-failing fixtures for performance tests, since they don't reach the matching stage.
+  Deno.test(`detectCardInMat: ${fixture.file} completes within budget (${fixture.name})`, () => {
+    const budget_ms = 50;
+    const src = loadImageMat(fixture.file);
+    try {
+      const elapsed = timeMedian(() => {
+        const result = detectCardInMat(cv, src);
+        result.cardMat?.delete();
+      });
+      assert(
+        elapsed < budget_ms,
+        `detectCardInMat(${fixture.file}) took ${
+          elapsed.toFixed(1)
+        }ms (median of ${TIMED_ITERATIONS}), budget is ${budget_ms}ms`,
+      );
+    } finally {
+      src.delete();
+    }
+  });
+}
+
+for (const fixture of FIXTURES) {
+  if (fixture.knownFailing) continue; // Skip known-failing fixtures for performance tests, since they don't reach the matching stage.
+  Deno.test(`identifyCardInMat: ${fixture.file} completes within budget (${fixture.name})`, async () => {
+    const db = await loadDB();
+    const src = loadImageMat(fixture.file);
+    const budget_ms = 90;
+    try {
+      const elapsed = timeMedian(() => {
+        identifyCardInMat(cv, src, db);
+      });
+      assert(
+        elapsed < budget_ms,
+        `identifyCardInMat(${fixture.file}) took ${
+          elapsed.toFixed(1)
+        }ms (median of ${TIMED_ITERATIONS}), budget is ${budget_ms}ms`,
+      );
+    } finally {
+      src.delete();
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Quad geometry unit tests (pure, no OpenCV)
 // ---------------------------------------------------------------------------
 
