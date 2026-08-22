@@ -93,6 +93,21 @@ export function matchCardCandidates(
   );
 }
 
+/**
+ * Small handicap applied to `"full"` (uncropped) candidate scores only when
+ * deciding which candidate wins, not to the reported confidence.
+ *
+ * The full-card crop is the one most exposed to imprecise quad corners — a
+ * sliver of background or sleeve bleeding in at the edges — so it's more
+ * prone to an occasional false match that happens to score well. Art-region
+ * crops sit well inside the card's own border and are comparatively
+ * insulated from that noise. This handicap only breaks near-ties in favour
+ * of the art-region match; a full-card match that's genuinely and clearly
+ * better (e.g. borderless/showcase cards with no usable art region) still
+ * wins.
+ */
+const FULL_SPACE_HANDICAP = 2;
+
 /** Shared candidate sweep; `search` supplies the database lookup. */
 function searchCandidates(
   candidates: CardCandidate[],
@@ -103,18 +118,23 @@ function searchCandidates(
   ) => MatchResult[],
 ): CandidateMatch | null {
   let best: CandidateMatch | null = null;
+  let bestAdjustedScore = Infinity;
 
   for (const candidate of candidates) {
     const space: HashSpace = candidate.source === "full" ? "full" : "art";
     const { pHash, dHash } = computeHashesFromImageData(candidate.imageData);
 
     for (const match of search(pHash, dHash, space)) {
-      if (!best || match.combinedScore < best.match.combinedScore) {
+      const adjustedScore = space === "full"
+        ? match.combinedScore + FULL_SPACE_HANDICAP
+        : match.combinedScore;
+      if (!best || adjustedScore < bestAdjustedScore) {
         best = {
           match,
           orientation: candidate.orientation,
           source: candidate.source,
         };
+        bestAdjustedScore = adjustedScore;
       }
     }
   }

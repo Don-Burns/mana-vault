@@ -46,8 +46,6 @@ const CARD_HEIGHT = 1040;
  */
 export function detectCardInMat(cv: Cv, src: Mat): PipelineResult {
   const gray = new cv.Mat();
-  const blurred = new cv.Mat();
-  const edges = new cv.Mat();
 
   try {
     // Grayscale — handle both RGBA and BGR input
@@ -59,6 +57,71 @@ export function detectCardInMat(cv: Cv, src: Mat): PipelineResult {
       src.copyTo(gray);
     }
 
+    const candidates = findCardQuadCandidates(cv, gray, src.cols, src.rows);
+    const corners = selectCardQuad(cv, gray, candidates);
+
+    if (!corners) {
+      return { found: false, candidates };
+    }
+
+    // Perspective correction
+    const cardMat = perspectiveWarp(cv, src, corners);
+
+    // A sleeve (or other backing) around the card can be picked up as the
+    // outer edge of `corners`, in which case the printed card's own edge is
+    // a smaller quad nested inside the warped result. Try to find it and
+    // re-warp to it; if none is found, keep the original warp unchanged.
+    const refined = refineInnerCardQuad(cv, cardMat);
+    if (refined) {
+      cardMat.delete();
+      return {
+        found: true,
+        corners,
+        candidates,
+        cardMat: refined,
+      };
+    }
+
+    return {
+      found: true,
+      corners,
+      candidates,
+      cardMat,
+    };
+  } finally {
+    gray.delete();
+  }
+}
+
+/**
+ * Run all three candidate-collection passes (Canny, Otsu, adaptive
+ * threshold) on a grayscale image and return every card-shaped quad found.
+ *
+ * Gathers candidates from three complementary sources:
+ *
+ *   1. Canny edges — works well for cards against contrasting backgrounds.
+ *   2. Otsu threshold — segments a dark card resting on a bright surface
+ *      (e.g. a card placed on a sheet of paper), which Canny can miss
+ *      when the card's border blends into surrounding printed content.
+ *   3. Adaptive threshold — a single global cutoff (Otsu) can miss a card
+ *      whose border is nearly the same brightness as the background (a
+ *      near-white card on white paper); thresholding each neighborhood
+ *      independently can still pick up that faint local step.
+ *
+ * Using all three lets us handle cluttered scenes where the card is nested
+ * inside a larger quad (paper, playmat, sleeve), which the caller resolves
+ * by preferring the innermost card-shaped quad.
+ */
+function findCardQuadCandidates(
+  cv: Cv,
+  gray: Mat,
+  frameWidth: number,
+  frameHeight: number,
+): [number, number][][] {
+  const blurred = new cv.Mat();
+  const edges = new cv.Mat();
+
+  try {
     // Blur to reduce noise
     cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
 
@@ -70,20 +133,6 @@ export function detectCardInMat(cv: Cv, src: Mat): PipelineResult {
     cv.dilate(edges, edges, kernel);
     kernel.delete();
 
-    // Gather card-shaped quad candidates from three complementary sources:
-    //
-    //   1. Canny edges — works well for cards against contrasting backgrounds.
-    //   2. Otsu threshold — segments a dark card resting on a bright surface
-    //      (e.g. a card placed on a sheet of paper), which Canny can miss
-    //      when the card's border blends into surrounding printed content.
-    //   3. Adaptive threshold — a single global cutoff (Otsu) can miss a card
-    //      whose border is nearly the same brightness as the background (a
-    //      near-white card on white paper); thresholding each neighborhood
-    //      independently can still pick up that faint local step.
-    //
-    // Using all three lets us handle cluttered scenes where the card is nested
-    // inside a larger bright quad (the paper), which we resolve below by
-    // preferring the innermost card-shaped quad.
     const candidates: [number, number][][] = [];
 
     const edgeContours = new cv.MatVector();
@@ -95,7 +144,7 @@ export function detectCardInMat(cv: Cv, src: Mat): PipelineResult {
       cv.RETR_LIST,
       cv.CHAIN_APPROX_SIMPLE,
     );
-    collectCardQuads(cv, edgeContours, src.cols, src.rows, candidates);
+    collectCardQuads(cv, edgeContours, frameWidth, frameHeight, candidates);
     edgeContours.delete();
     edgeHierarchy.delete();
 
@@ -124,7 +173,7 @@ export function detectCardInMat(cv: Cv, src: Mat): PipelineResult {
       cv.RETR_LIST,
       cv.CHAIN_APPROX_SIMPLE,
     );
-    collectCardQuads(cv, threshContours, src.cols, src.rows, candidates);
+    collectCardQuads(cv, threshContours, frameWidth, frameHeight, candidates);
     threshContours.delete();
     threshHierarchy.delete();
     thresh.delete();
@@ -156,30 +205,117 @@ export function detectCardInMat(cv: Cv, src: Mat): PipelineResult {
       cv.RETR_LIST,
       cv.CHAIN_APPROX_SIMPLE,
     );
-    collectCardQuads(cv, adaptiveContours, src.cols, src.rows, candidates);
+    collectCardQuads(
+      cv,
+      adaptiveContours,
+      frameWidth,
+      frameHeight,
+      candidates,
+    );
     adaptiveContours.delete();
     adaptiveHierarchy.delete();
     adaptive.delete();
 
-    const corners = selectCardQuad(cv, gray, candidates);
-
-    if (!corners) {
-      return { found: false, candidates };
-    }
-
-    // Perspective correction
-    const cardMat = perspectiveWarp(cv, src, corners);
-
-    return {
-      found: true,
-      corners,
-      candidates,
-      cardMat,
-    };
+    return candidates;
   } finally {
-    gray.delete();
     blurred.delete();
     edges.delete();
+  }
+}
+
+/**
+ * Look for the printed card's own edge nested inside an already-warped
+ * card image, and re-warp to it if found.
+ *
+ * A sleeve (or similar backing) around the card is sometimes picked up as
+ * the outer detected quad, since it's the highest-contrast boundary in the
+ * frame. Its own border is a fixed pixel margin, not a percentage of the
+ * card — unlike the printed frame it doesn't match any {@link ART_REGIONS}
+ * calibration. Rather than guess a sleeve-thickness percentage, run the same
+ * candidate-collection pass on the warped card itself: `collectCardQuads`
+ * already rejects quads touching the frame edge, so any candidate found here
+ * is necessarily nested inside the outer warp — i.e. a real inner boundary,
+ * not the sleeve edge that was just warped to fill the frame. The largest
+ * such candidate is the best estimate of the true printed card edge.
+ *
+ * Returns null (leaving the original warp untouched) when no clean inner
+ * quad is found, e.g. an unsleeved card or a sleeve with no visible seam.
+ */
+function refineInnerCardQuad(cv: Cv, cardMat: Mat): Mat | null {
+  const gray = new cv.Mat();
+  try {
+    if (cardMat.channels() === 4) {
+      cv.cvtColor(cardMat, gray, cv.COLOR_RGBA2GRAY);
+    } else if (cardMat.channels() === 3) {
+      cv.cvtColor(cardMat, gray, cv.COLOR_BGR2GRAY);
+    } else {
+      cardMat.copyTo(gray);
+    }
+
+    const candidates = findCardQuadCandidates(
+      cv,
+      gray,
+      cardMat.cols,
+      cardMat.rows,
+    );
+    if (candidates.length === 0) return null;
+
+    // Same brightness-contrast discrimination as `selectCardQuad`: a real
+    // sleeve/backing edge has a border whose intensity differs meaningfully
+    // from the printed card it encloses, whereas an ordinary card's own
+    // internal regions (art box, text box) do not differ enough from the
+    // whole card to be mistaken for an outer boundary — this is what
+    // prevents a plain unsleeved card from being needlessly re-cropped.
+    const fullMean = meanIntensity(cv, gray, [
+      [0, 0],
+      [cardMat.cols, 0],
+      [cardMat.cols, cardMat.rows],
+      [0, cardMat.rows],
+    ]);
+    const SLEEVE_BRIGHTNESS_MARGIN = 25;
+
+    // Largest surviving candidate whose content differs enough in
+    // brightness from the whole (sleeve+card) frame — every candidate here
+    // is already guaranteed not to touch the frame edge, so this is the
+    // closest-fitting inner boundary rather than a smaller sub-region of the
+    // card.
+    //
+    // A sleeve trim shrinks both dimensions by roughly the same small
+    // margin, unlike an internal card region (e.g. the rules text box),
+    // which can coincidentally have a card-like aspect ratio while spanning
+    // most of one axis and only a fraction of the other. Requiring both the
+    // width and height to retain most of the canvas span rules those out.
+    const MIN_DIMENSION_RETENTION = 0.75;
+    let best: [number, number][] | null = null;
+    let bestArea = 0;
+    for (const candidate of candidates) {
+      const xs = candidate.map((p) => p[0]);
+      const ys = candidate.map((p) => p[1]);
+      const w = Math.max(...xs) - Math.min(...xs);
+      const h = Math.max(...ys) - Math.min(...ys);
+      if (
+        w < cardMat.cols * MIN_DIMENSION_RETENTION ||
+        h < cardMat.rows * MIN_DIMENSION_RETENTION
+      ) continue;
+
+      const mean = meanIntensity(cv, gray, candidate);
+      if (Math.abs(mean - fullMean) <= SLEEVE_BRIGHTNESS_MARGIN) continue;
+      const area = quadArea(candidate);
+      if (area > bestArea) {
+        best = candidate;
+        bestArea = area;
+      }
+    }
+    if (!best) return null;
+
+    // Not worth re-warping for a trivial trim — only refine when the inner
+    // quad is meaningfully smaller (a real sleeve margin, not detection
+    // noise).
+    if (bestArea > cardMat.cols * cardMat.rows * 0.9) return null;
+
+    return perspectiveWarp(cv, cardMat, best);
+  } finally {
+    gray.delete();
   }
 }
 
@@ -194,6 +330,37 @@ export function detectCardInMat(cv: Cv, src: Mat): PipelineResult {
  * e.g. to prefer a small card nested inside a larger bright quad such as a
  * sheet of paper.
  */
+/**
+ * How close (in pixels) a quad's bounding box may come to the source frame's
+ * edges before it's rejected as "hugging the frame".
+ *
+ * A real photographed card almost always has some visible background margin
+ * around it. Without this check, the camera frame's own border can itself
+ * pass `isCardShaped` (many photos are close enough to a 4:3-ish aspect
+ * ratio to fall inside the accepted 0.55-0.85 band) and the area filter
+ * (<95% of the frame), making it a spurious "card" candidate that then wins
+ * `selectCardQuad`'s largest-quad fallback whenever no clean smaller quad is
+ * preferred (e.g. on a dark or textured background, see
+ * BACKING_BRIGHTNESS_MARGIN below).
+ */
+const FRAME_EDGE_MARGIN = 4;
+
+/** True if a quad's bounding box touches (within FRAME_EDGE_MARGIN of) the frame edges. */
+function touchesFrameEdge(
+  points: [number, number][],
+  frameWidth: number,
+  frameHeight: number,
+): boolean {
+  const xs = points.map((p) => p[0]);
+  const ys = points.map((p) => p[1]);
+  return (
+    Math.min(...xs) <= FRAME_EDGE_MARGIN ||
+    Math.min(...ys) <= FRAME_EDGE_MARGIN ||
+    Math.max(...xs) >= frameWidth - FRAME_EDGE_MARGIN ||
+    Math.max(...ys) >= frameHeight - FRAME_EDGE_MARGIN
+  );
+}
+
 export function collectCardQuads(
   cv: Cv,
   contours: MatVector,
@@ -225,7 +392,10 @@ export function collectCardQuads(
 
     if (approx.rows === 4 && cv.isContourConvex(approx)) {
       const points = matToPoints(approx);
-      if (isCardShaped(points)) {
+      if (
+        isCardShaped(points) &&
+        !touchesFrameEdge(points, frameWidth, frameHeight)
+      ) {
         out.push(points);
       }
     }
@@ -292,19 +462,20 @@ function meanIntensity(cv: Cv, gray: Mat, points: [number, number][]): number {
 /**
  * Choose the best card quad from a set of candidates.
  *
- * Cards are frequently photographed resting on a larger bright surface (a
- * desk, a sheet of paper) whose border is itself detected as a card-shaped
- * quad. When a smaller card-shaped quad is nested inside a larger, markedly
- * brighter quad, the smaller quad is the real card sitting on a pale backing,
- * so we prefer it.
+ * Cards are frequently photographed resting on a larger surface (a desk, a
+ * sheet of paper, a playmat) whose border is itself detected as a
+ * card-shaped quad. When a smaller card-shaped quad is nested inside a
+ * larger quad of markedly different intensity, the smaller quad is the real
+ * card sitting on that backing, so we prefer it.
  *
- * The brightness test is important: a card photographed alone also yields
- * nested quads (its art box, text box, etc. approximate to card-shaped
- * rectangles), but those inner regions are *not* brighter than the card as a
- * whole, so we must not treat them as the card. Only when the surrounding
- * quad is substantially brighter — as a blank sheet of paper is — do we drill
- * inward. Otherwise we fall back to the largest quad (the original behaviour
- * for clean single-card photos).
+ * The intensity-difference test is important: a card photographed alone also
+ * yields nested quads (its art box, text box, etc. approximate to
+ * card-shaped rectangles), but those inner regions are *not* meaningfully
+ * different in brightness from the card as a whole, so we must not treat
+ * them as the card. Only when the surrounding quad's mean intensity differs
+ * substantially — brighter (a blank sheet of paper) or darker (a black
+ * playmat) — do we drill inward. Otherwise we fall back to the largest quad
+ * (the original behaviour for clean single-card photos).
  */
 export function selectCardQuad(
   cv: Cv,
@@ -319,18 +490,21 @@ export function selectCardQuad(
     mean: meanIntensity(cv, gray, points),
   }));
 
-  // How much brighter an enclosing quad must be to be considered a pale
-  // backing (paper/desk) rather than the card itself.
+  // How much an enclosing quad's mean intensity must differ (in either
+  // direction) to be considered a backing (paper/desk/playmat) rather than
+  // the card itself.
   const BACKING_BRIGHTNESS_MARGIN = 25;
 
-  // Prefer the smallest quad nested inside a meaningfully larger, brighter one.
+  // Prefer the smallest quad nested inside a meaningfully larger quad whose
+  // mean intensity differs enough to be a backing rather than a sub-region
+  // of the card itself.
   const nested = withArea
     .filter((c) =>
       withArea.some(
         (other) =>
           other !== c &&
           other.area > c.area * 1.5 &&
-          other.mean - c.mean > BACKING_BRIGHTNESS_MARGIN &&
+          Math.abs(other.mean - c.mean) > BACKING_BRIGHTNESS_MARGIN &&
           isNestedInside(c.points, other.points),
       )
     )
@@ -562,6 +736,31 @@ export interface CardCandidate {
   source: CandidateSource;
 }
 
+/**
+ * Fraction of the card's width/height trimmed from each edge of the
+ * uncropped `"full"` candidate before hashing.
+ *
+ * `detectCardInMat`'s quad corners are rarely pixel-perfect; a sliver of
+ * background can bleed into the warp at the edges. The full-card hash is
+ * sensitive to that bleed (unlike the art crops, which sit well inside the
+ * card's own border), so a false full-card match can occasionally out-score
+ * a correct art-region match. Trimming a small fixed margin removes the most
+ * likely bleed without cutting into the card's own content.
+ */
+const FULL_CARD_TRIM = 0.02;
+
+/** Crop a Mat inward by a fixed fraction of its width/height on every edge. */
+function insetMat(cv: Cv, mat: Mat, fraction: number): Mat {
+  const dx = Math.round(mat.cols * fraction);
+  const dy = Math.round(mat.rows * fraction);
+  const rect = new cv.Rect(dx, dy, mat.cols - dx * 2, mat.rows - dy * 2);
+  const roi = mat.roi(rect);
+  const result = new cv.Mat();
+  roi.copyTo(result);
+  roi.delete();
+  return result;
+}
+
 /** Sources emitted per orientation, in the order they are produced. */
 const CANDIDATE_SOURCES: CandidateSource[] = [
   "full",
@@ -613,11 +812,13 @@ export function extractCardCandidates(
     try {
       for (const source of CANDIDATE_SOURCES) {
         if (source === "full") {
+          const trimmed = insetMat(cv, rotated, FULL_CARD_TRIM);
           results.push({
-            imageData: matToImageData(cv, rotated),
+            imageData: matToImageData(cv, trimmed),
             orientation: orientation as 0 | 1,
             source,
           });
+          trimmed.delete();
           continue;
         }
 

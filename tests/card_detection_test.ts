@@ -28,6 +28,8 @@
  *   junji_on_white.jpg                   — "Junji, the Midnight Sky" (NEO #102)
  *   toshiro_umezawa_sld_on_white.jpg     — "Toshiro Umezawa" (SLD #261)
  *   sleeved_multani.jpg                  — "Multani, Yavimaya's Avatar" (DOM #174, sleeved)
+ *   thalia_guadian_of_thraben_on_mat.jpg  — "Thalia, Guardian of Thraben" (on mat)
+ *   villainous_wealth_sleeved_on_white.jpg — "Villainous Wealth" (sleeved, on white)
  *
  * The fixtures are in DIFFERENT orientations, which is precisely why the full
  * pipeline must resolve orientation itself rather than relying on the test to
@@ -129,6 +131,18 @@ const MULTANI_SLEEVED: Fixture = {
   illustrationId: "2e356f4d-df6b-47f7-8a11-6e9bb1b7d080",
 };
 
+const THALIA: Fixture = {
+  file: "thalia_guadian_of_thraben_on_mat.jpg",
+  name: "Thalia, Guardian of Thraben",
+  illustrationId: "dd372f20-0ea6-4e69-92b5-c3d3d1a2ba2e",
+};
+
+const VILLAINOUS_WEALTH_WHITE: Fixture = {
+  file: "villainous_wealth_sleeved_on_white.jpg",
+  name: "Villainous Wealth",
+  illustrationId: "e46a8183-2725-4ddf-9494-8f4367af826f",
+};
+
 const FIXTURES: Fixture[] = [
   TEMPLE,
   KAITO,
@@ -140,6 +154,8 @@ const FIXTURES: Fixture[] = [
   JUNJI,
   TOSHIRO_SLD,
   MULTANI_SLEEVED,
+  THALIA,
+  VILLAINOUS_WEALTH_WHITE,
 ];
 
 // --- Helpers ---
