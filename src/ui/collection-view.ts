@@ -4,6 +4,7 @@ import {
   type Folder,
 } from "../collection/store.ts";
 import { exportAsDB, importFromDB } from "../collection/export.ts";
+import { showCsvExportDialog } from "./csv-export-dialog.ts";
 import { computeDiff, simulateAdd } from "../collection/diff.ts";
 import { openMergeView } from "./merge-view.ts";
 import { getCardImageUrl } from "../collection/card-image.ts";
@@ -32,6 +33,7 @@ export function CollectionView(container: HTMLElement) {
       <div class="header-actions">
         <button class="btn-sm" id="btn-add-folder">+ Folder</button>
         <button class="btn-sm" id="btn-export">Export</button>
+        <button class="btn-sm" id="btn-export-csv">Export CSV</button>
         <button class="btn-sm" id="btn-import">Import</button>
       </div>
     </div>
@@ -86,6 +88,10 @@ export function CollectionView(container: HTMLElement) {
       handleAddFolder,
     );
     el.querySelector("#btn-export")!.addEventListener("click", handleExport);
+    el.querySelector("#btn-export-csv")!.addEventListener(
+      "click",
+      handleExportCsv,
+    );
     el.querySelector("#btn-import")!.addEventListener("click", handleImport);
     el.querySelector("#btn-back")!.addEventListener("click", handleBack);
     el.querySelector("#btn-edit-mode")!.addEventListener(
@@ -543,6 +549,11 @@ export function CollectionView(container: HTMLElement) {
     } finally {
       btn.disabled = false;
     }
+  }
+
+  async function handleExportCsv() {
+    const folders = await collectionStore.getAllFolders();
+    showCsvExportDialog(el, folders);
   }
 
   async function handleImport() {

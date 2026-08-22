@@ -12,9 +12,17 @@
  * docs/turso_wasm_hang_and_alternatives.md.
  */
 
-import { collectionStore } from "./store.ts";
+import { stringify } from "@std/csv";
+import { type CardEntry, collectionStore } from "./store.ts";
 
 const DB_MIME_TYPE = "application/x-sqlite3";
+const CSV_COLUMNS = [
+  "quantity",
+  "name",
+  "set_code",
+  "collector_number",
+  "condition",
+] as const;
 
 /** Export the entire collection as a downloadable SQLite `.db` file. */
 export async function exportAsDB(): Promise<void> {
@@ -37,6 +45,37 @@ export async function importFromDB(): Promise<{ folders: number; cards: number }
     return counts;
   } catch {
     throw new Error("Not a valid Mana Vault collection database");
+  }
+}
+
+/** Serialize cards to CSV text (same column layout the CSV importer expects). */
+export function cardsToCsv(cards: CardEntry[]): string {
+  const rows = cards.map((c) => ({
+    quantity: String(c.quantity),
+    name: c.name,
+    set_code: c.setCode,
+    collector_number: c.collectorNumber,
+    condition: c.condition,
+  }));
+  return stringify(rows, { columns: CSV_COLUMNS });
+}
+
+/**
+ * Export cards as CSV, either to a downloaded file or the system clipboard.
+ * `folderId` of `null` exports the whole collection.
+ */
+export async function exportCardsAsCsv(
+  folderId: string | null,
+  destination: "file" | "clipboard",
+): Promise<void> {
+  const cards = folderId
+    ? await collectionStore.getCardsByFolder(folderId)
+    : await collectionStore.getAllCards();
+  const csv = cardsToCsv(cards);
+  if (destination === "clipboard") {
+    await navigator.clipboard.writeText(csv);
+  } else {
+    downloadFile(csv, "mana-vault-export.csv", "text/csv");
   }
 }
 
