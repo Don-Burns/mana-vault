@@ -9,9 +9,10 @@
  *
  * Overwrites a single moving `db-latest` release/tag rather than minting a
  * new versioned tag each time — simplest thing that lets CI always fetch
- * "the current DB" with no workflow edits required per release. If per-build
- * history/rollback is ever needed, switch this to a timestamped tag and
- * update `db-latest` in `deploy.yml` to match.
+ * "the current DB" with no workflow edits required per release. It then
+ * dispatches the Pages workflow so the new assets are actually deployed.
+ * If per-build history/rollback is ever needed, switch this to a timestamped
+ * tag and update `db-latest` in `deploy.yml` to match.
  */
 
 const TAG = "db-latest";
@@ -46,11 +47,16 @@ async function main() {
   } else {
     await run(["gh", "release", "upload", TAG, ...FILES, "--clobber"]);
     console.log(`Updated release ${TAG} with ${FILES.join(", ")}`);
+    await run(["gh", "workflow", "run", "deploy.yml", "--ref", "main"]);
+    console.log("Dispatched the GitHub Pages deploy workflow");
     return;
   }
 
   await run(["gh", "release", "upload", TAG, ...FILES, "--clobber"]);
   console.log(`Published release ${TAG} with ${FILES.join(", ")}`);
+
+  await run(["gh", "workflow", "run", "deploy.yml", "--ref", "main"]);
+  console.log("Dispatched the GitHub Pages deploy workflow");
 }
 
 main().catch((err) => {
